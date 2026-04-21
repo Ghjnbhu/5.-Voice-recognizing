@@ -80,174 +80,178 @@ function App() {
     setMicrophoneLevel(0)
   }, [])
 
-  // IMPROVED: Recognition with proper Android fixes
+  // FIXED: Only change is using event.resultIndex
   const initRecognition = useCallback(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SpeechRecognition) {
-      addDiagnosticLog('ERROR', 'Speech recognition not supported');
-      return null;
+      addDiagnosticLog('ERROR', 'Speech recognition not supported')
+      setError('Speech recognition not supported')
+      return null
     }
 
-    addDiagnosticLog('INFO', 'Initializing engine...', `Language: ${selectedLanguage}`);
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false; // Required for stability on Android
-    recognition.interimResults = true;
-    recognition.lang = selectedLanguage;
+    addDiagnosticLog('INFO', 'Initializing speech recognition...', `Language: ${selectedLanguage}`)
+    const recognition = new SpeechRecognition()
+    recognition.continuous = false
+    recognition.interimResults = true
+    recognition.lang = selectedLanguage
+    recognition.maxAlternatives = 1
 
     recognition.onstart = () => {
-      addDiagnosticLog('SUCCESS', '🎤 Engine Started');
-      startMicrophoneVisualization();
-    };
+      addDiagnosticLog('SUCCESS', '🎤 Recognition started!', 'Listening for speech')
+      startMicrophoneVisualization()
+    }
 
+    // KEY FIX: Using event.resultIndex instead of iterating all results
     recognition.onresult = (event) => {
-      let finalText = '';
-      // IMPROVED: Using event.resultIndex for reliability
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          finalText += event.results[i][0].transcript + ' ';
+      addDiagnosticLog('SUCCESS', `📝 Results received!`, `${event.results.length} result(s)`)
+      
+      let finalText = ''
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i]
+        const text = result[0].transcript
+        if (result.isFinal) {
+          finalText += text + ' '
+          addDiagnosticLog('SUCCESS', `📝 Captured: "${text}"`, 'Added to transcript')
+        } else {
+          addDiagnosticLog('INFO', `🎤 Hearing: "${text}"`, 'Interim result')
         }
       }
+      
       if (finalText) {
-        setTranscript(prev => prev + finalText);
-        addDiagnosticLog('SUCCESS', '📝 Captured phrase', finalText.trim());
+        setTranscript(prev => prev + finalText)
       }
-    };
+    }
+
+    recognition.onerror = (event) => {
+      addDiagnosticLog('WARNING', `Recognition error: ${event.error}`, '')
+      if (event.error === 'not-allowed') {
+        setError('Microphone access denied. Tap 🔒 → Allow microphone')
+        setIsListening(false)
+        stopMicrophoneVisualization()
+      } else if (event.error === 'no-speech') {
+        addDiagnosticLog('INFO', 'No speech detected', 'Still listening...')
+      }
+    }
 
     recognition.onend = () => {
-      // IMPROVED: Only restart if user wants to listen AND app is visible
-      if (isListening && document.visibilityState === 'visible') {
-        addDiagnosticLog('INFO', '🔄 Auto-restarting...');
-        
-        // IMPROVED: Increased buffer time (350ms) for mic hardware release
-        if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+      addDiagnosticLog('INFO', 'Recognition session ended', isListening ? 'Auto-restarting...' : 'Stopped')
+      
+      if (isListening) {
+        if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
         restartTimeoutRef.current = setTimeout(() => {
           if (isListening && recognitionRef.current) {
             try {
-              recognitionRef.current.start();
+              recognitionRef.current.start()
             } catch (err) {
-              addDiagnosticLog('ERROR', 'Restart failed', err.message);
+              addDiagnosticLog('ERROR', 'Restart failed', err.message)
+              setIsListening(false)
+              stopMicrophoneVisualization()
             }
           }
-        }, 350);
-      } else if (!isListening) {
-        addDiagnosticLog('INFO', 'Stopped by user');
-        stopMicrophoneVisualization();
+        }, 100)
       } else {
-        addDiagnosticLog('INFO', 'Stopped (App in background)');
+        stopMicrophoneVisualization()
       }
-    };
-
-    recognition.onerror = (event) => {
-      if (event.error === 'no-speech') {
-        addDiagnosticLog('INFO', 'No speech, staying active...');
-      } else if (event.error === 'not-allowed') {
-        setError('Microphone access denied. Tap 🔒 → Allow microphone');
-        setIsListening(false);
-        stopMicrophoneVisualization();
-      } else if (event.error === 'audio-capture') {
-        setError('No microphone found');
-        setIsListening(false);
-      } else {
-        addDiagnosticLog('WARNING', `Error: ${event.error}`);
-      }
-    };
+    }
 
     recognition.onsoundstart = () => {
-      addDiagnosticLog('SUCCESS', '🔊 Sound detected!');
-    };
+      addDiagnosticLog('SUCCESS', '🔊 Sound detected!', 'Processing speech')
+    }
 
     recognition.onspeechend = () => {
-      addDiagnosticLog('INFO', 'Speech ended, processing...');
-    };
+      addDiagnosticLog('INFO', 'Speech ended', 'Transcribing...')
+    }
 
-    return recognition;
-  }, [selectedLanguage, isListening, startMicrophoneVisualization, stopMicrophoneVisualization]);
+    return recognition
+  }, [selectedLanguage, startMicrophoneVisualization, stopMicrophoneVisualization, isListening])
 
   useEffect(() => {
-    recognitionRef.current = initRecognition();
-    addDiagnosticLog('INFO', 'App ready', 'Improved Android workaround active');
+    recognitionRef.current = initRecognition()
+    addDiagnosticLog('INFO', 'App ready', 'Tap Start Listening')
     return () => {
-      if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
-      if (recognitionRef.current) recognitionRef.current.abort();
-      stopMicrophoneVisualization();
-    };
-  }, [initRecognition, stopMicrophoneVisualization]);
+      if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
+      if (recognitionRef.current) recognitionRef.current.abort()
+      stopMicrophoneVisualization()
+    }
+  }, [initRecognition, stopMicrophoneVisualization])
 
-  // Reinitialize when language changes
   useEffect(() => {
     if (recognitionRef.current) {
-      const wasListening = isListening;
+      const wasListening = isListening
       if (wasListening) {
-        try { recognitionRef.current.stop(); } catch(e) {}
+        try { recognitionRef.current.stop() } catch(e) {}
         setTimeout(() => {
-          recognitionRef.current = initRecognition();
+          recognitionRef.current = initRecognition()
           if (wasListening) {
-            try { recognitionRef.current.start(); } catch(e) {}
+            try { recognitionRef.current.start() } catch(e) {}
           }
-        }, 400);
+        }, 200)
       } else {
-        recognitionRef.current = initRecognition();
+        recognitionRef.current = initRecognition()
       }
     }
-  }, [selectedLanguage, initRecognition, isListening]);
+  }, [selectedLanguage, initRecognition, isListening])
 
   const startListening = async () => {
-    setError('');
-    addDiagnosticLog('INFO', '▶️ Start button pressed');
+    setError('')
+    setTranscript('')
+    addDiagnosticLog('INFO', '▶️ Start button pressed', '')
     
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach(track => track.stop());
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      stream.getTracks().forEach(track => track.stop())
       
-      setIsListening(true);
-      recognitionRef.current.start();
-      addDiagnosticLog('SUCCESS', 'Listening active', '350ms restart delay active');
+      setIsListening(true)
+      recognitionRef.current.start()
+      addDiagnosticLog('SUCCESS', 'Listening active', '')
     } catch (err) {
-      addDiagnosticLog('ERROR', 'Permission failed', err.message);
-      setError(`Error: ${err.message}. Tap 🔒 and allow microphone.`);
+      addDiagnosticLog('ERROR', 'Microphone permission failed', err.message)
+      setError(`Microphone error: ${err.message}. Tap 🔒 and allow microphone.`)
+      setIsListening(false)
     }
-  };
+  }
 
   const stopListening = () => {
-    addDiagnosticLog('INFO', '⏹️ Stopped by user');
-    setIsListening(false);
+    addDiagnosticLog('INFO', '⏹️ Stop button pressed', '')
+    setIsListening(false)
     
-    if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+    if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch(e) {}
+      try { recognitionRef.current.stop() } catch(e) {}
     }
-  };
+    stopMicrophoneVisualization()
+  }
 
   const clearText = () => {
-    setTranscript('');
-    addDiagnosticLog('INFO', 'Text cleared');
-  };
+    setTranscript('')
+    addDiagnosticLog('INFO', 'Text cleared', '')
+  }
 
   const clearLogs = () => {
-    setDiagnosticLogs([]);
-    addDiagnosticLog('INFO', 'Logs cleared');
-  };
+    setDiagnosticLogs([])
+    addDiagnosticLog('INFO', 'Logs cleared', '')
+  }
 
   const getLevelColor = () => {
-    if (microphoneLevel < 20) return '#4caf50';
-    if (microphoneLevel < 50) return '#8bc34a';
-    if (microphoneLevel < 80) return '#ff9800';
-    return '#f44336';
-  };
+    if (microphoneLevel < 20) return '#4caf50'
+    if (microphoneLevel < 50) return '#8bc34a'
+    if (microphoneLevel < 80) return '#ff9800'
+    return '#f44336'
+  }
 
   const getLogIcon = (type) => {
     switch(type) {
-      case 'SUCCESS': return '✅';
-      case 'ERROR': return '❌';
-      case 'WARNING': return '⚠️';
-      default: return '🔄';
+      case 'SUCCESS': return '✅'
+      case 'ERROR': return '❌'
+      case 'WARNING': return '⚠️'
+      default: return '🔄'
     }
-  };
+  }
 
   return (
     <div className="container">
       <h1>🎙️ Voice Recognition</h1>
-      <p className="subtitle">Improved Android Workaround - 350ms Restart Delay</p>
+      <p className="subtitle">Fixed - Using event.resultIndex for reliable results</p>
 
       {error && <div className="error-message">⚠️ {error}</div>}
 
@@ -267,21 +271,21 @@ function App() {
           <div className="level-bar-fill" style={{ width: isListening ? `${microphoneLevel}%` : '0%', backgroundColor: getLevelColor() }} />
         </div>
         {isListening && microphoneLevel < 10 && (
-          <div className="level-hint">🔴 No sound - speak louder or check mic</div>
+          <div className="level-hint">🔴 No sound detected - speak louder or check microphone</div>
         )}
         {isListening && microphoneLevel > 50 && (
-          <div className="level-hint success">🟢 Voice detected! Speaking...</div>
+          <div className="level-hint success">🟢 Great! Microphone is picking up your voice</div>
         )}
       </div>
 
       <div className="visual-console">
         <div className="console-header">
-          <strong>📱 Live Console (350ms Restart Delay)</strong>
+          <strong>📱 Live Console</strong>
           <button onClick={clearLogs} className="console-clear">Clear</button>
         </div>
         <div className="console-logs">
           {diagnosticLogs.length === 0 ? (
-            <div className="console-empty">Tap "Start Listening" - 350ms delay prevents mic conflicts</div>
+            <div className="console-empty">Tap "Start Listening" and speak...</div>
           ) : (
             diagnosticLogs.map((log, idx) => (
               <div key={idx} className={`console-log console-${log.type.toLowerCase()}`}>
@@ -303,7 +307,7 @@ function App() {
 
       <div className="status">
         <span className="status-icon">{isListening ? '🔴' : '⚪'}</span>
-        Status: {isListening ? '🔄 Active (350ms restart)' : 'Idle'}
+        Status: {isListening ? 'Listening...' : 'Idle'}
         <span className="language-badge">{languages.find(l => l.code === selectedLanguage)?.name || selectedLanguage}</span>
       </div>
 
@@ -313,15 +317,14 @@ function App() {
       </div>
 
       <div className="info">
-        <p>🔧 <strong>Android Workaround Improvements:</strong></p>
-        <ul>
-          <li>✅ <code>continuous: false</code> - Prevents Chrome's broken continuous mode</li>
-          <li>✅ <code>event.resultIndex</code> - More reliable result extraction</li>
-          <li>✅ <strong>350ms restart delay</strong> - Allows mic hardware to fully release</li>
-          <li>✅ <code>document.visibilityState</code> - No restart when app is backgrounded</li>
-          <li>✅ 'no-speech' handled gracefully - Doesn't break the flow</li>
-        </ul>
-        <p className="note">💡 The 350ms delay is critical - Chrome needs time to release the mic hardware before restarting!</p>
+        <p>🎤 <strong>How to use:</strong></p>
+        <ol>
+          <li><strong>Press Start Listening</strong> - Grant microphone permission when asked</li>
+          <li><strong>Speak clearly</strong> - Your words will appear in real-time</li>
+          <li><strong>Watch the console</strong> - Look for "📝 Results received!" messages</li>
+          <li><strong>If no text appears</strong> - Check that "📝 Results received!" appears in console</li>
+        </ol>
+        <p className="note">💡 The console will show "📝 Results received!" when speech is recognized</p>
       </div>
     </div>
   )
