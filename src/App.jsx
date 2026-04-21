@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import './App.css'
 
 function App() {
@@ -8,12 +8,15 @@ function App() {
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
   const [selectedLanguage, setSelectedLanguage] = useState('en-US')
   const [recognitionStatus, setRecognitionStatus] = useState('')
+  const [restartCount, setRestartCount] = useState(0)
+  
   const recognitionRef = useRef(null)
   const audioContextRef = useRef(null)
   const mediaStreamRef = useRef(null)
   const analyserNodeRef = useRef(null)
   const animationFrameRef = useRef(null)
   const restartTimeoutRef = useRef(null)
+  const shouldRestartRef = useRef(false)
   const isAndroid = /Android/i.test(navigator.userAgent)
 
   // Language options
@@ -33,7 +36,7 @@ function App() {
   ]
 
   // Update microphone level visualization
-  const updateMicrophoneLevel = () => {
+  const updateMicrophoneLevel = useCallback(() => {
     if (!analyserNodeRef.current) return
     
     const dataArray = new Uint8Array(analyserNodeRef.current.frequencyBinCount)
@@ -49,12 +52,11 @@ function App() {
     setMicrophoneLevel(level)
     
     animationFrameRef.current = requestAnimationFrame(updateMicrophoneLevel)
-  }
+  }, [])
 
-  // Start microphone for level visualization
-  const startMicrophoneVisualization = async () => {
+  // Start microphone visualization
+  const startMicrophoneVisualization = useCallback(async () => {
     try {
-      // Don't create a new stream if we already have one
       if (mediaStreamRef.current && mediaStreamRef.current.active) {
         return
       }
@@ -77,9 +79,9 @@ function App() {
     } catch (err) {
       console.error('Microphone visualization error:', err)
     }
-  }
+  }, [updateMicrophoneLevel])
 
-  const stopMicrophoneVisualization = () => {
+  const stopMicrophoneVisualization = useCallback(() => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current)
     }
@@ -93,10 +95,48 @@ function App() {
     }
     analyserNodeRef.current = null
     setMicrophoneLevel(0)
-  }
+  }, [])
 
-  // Initialize speech recognition with auto-restart
-  const initRecognition = () => {
+  // Core: Smart restart function that mimics dictation.io
+  const restartRecognition = useCallback(() => {
+    if (!shouldRestartRef.current) return
+    
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current)
+    }
+    
+    restartTimeoutRef.current = setTimeout(() => {
+      if (shouldRestartRef.current && recognitionRef.current) {
+        try {
+          console.log('🔄 Auto-restarting recognition...')
+          setRecognitionStatus('🎤 Restarting microphone...')
+          recognitionRef.current.start()
+          setRestartCount(prev => prev + 1)
+        } catch (err) {
+          console.error('❌ Auto-restart failed:', err)
+          // Silently retry after a bit longer
+          if (shouldRestartRef.current) {
+            restartTimeoutRef.current = setTimeout(() => {
+              if (shouldRestartRef.current && recognitionRef.current) {
+                try {
+                  recognitionRef.current.start()
+                } catch (e) {
+                  console.error('❌ Second restart attempt failed:', e)
+                  // Give up and let user restart manually
+                  shouldRestartRef.current = false
+                  setIsListening(false)
+                  setRecognitionStatus('❌ Mic failed - click Start again')
+                }
+              }
+            }, 1000)
+          }
+        }
+      }
+    }, 50) // Super fast restart - like dictation.io
+  }, [])
+
+  // Initialize speech recognition
+  const initRecognition = useCallback(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SpeechRecognition) {
       setError('Speech recognition not supported')
@@ -104,22 +144,16 @@ function App() {
     }
 
     const recognition = new SpeechRecognition()
-    // Critical: Use continuous=false for reliable auto-restart on Android
+    // Critical: Use continuous=false for reliable restarts on Android
     recognition.continuous = false
     recognition.interimResults = true
     recognition.lang = selectedLanguage
     recognition.maxAlternatives = 1
 
-    recognition.onstart = () => {
-      console.log('Recognition started')
-      setRecognitionStatus('🎤 Listening... Speak now')
-      setError('')
-      startMicrophoneVisualization()
-    }
-
+    // Handle results - accumulate text smoothly
     recognition.onresult = (event) => {
-      console.log('Result received:', event.results)
       let finalText = ''
+      let interimText = ''
 
       for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i]
@@ -127,127 +161,107 @@ function App() {
         
         if (result.isFinal) {
           finalText += text + ' '
-          console.log('Final:', text)
+          console.log('✅ Final:', text)
         } else {
-          // Show interim results in status
-          setRecognitionStatus(`🎤 Hearing: "${text}"`)
+          interimText += text
+          console.log('📝 Interim:', text)
         }
       }
 
       if (finalText) {
         setTranscript(prev => prev + finalText)
-        setRecognitionStatus('✅ Captured! Listening for more...')
+        setRecognitionStatus('✨ Captured! Listening for more...')
+      } else if (interimText) {
+        setRecognitionStatus(`🎤 "${interimText}"`)
       }
     }
 
-    recognition.onerror = (event) => {
-      console.error('Recognition error:', event.error)
-      
-      switch (event.error) {
-        case 'no-speech':
-          // Don't show error for no-speech, just update status
-          setRecognitionStatus('🎤 No speech detected, still listening...')
-          break
-        case 'audio-capture':
-          setError('No microphone found.')
-          setRecognitionStatus('Microphone error')
-          setIsListening(false)
-          stopMicrophoneVisualization()
-          break
-        case 'not-allowed':
-          setError('Microphone access denied. Please check Chrome permissions.')
-          setRecognitionStatus('Permission denied')
-          setIsListening(false)
-          stopMicrophoneVisualization()
-          break
-        case 'network':
-          setError('Network error. Please check your connection.')
-          setRecognitionStatus('Network error')
-          setIsListening(false)
-          stopMicrophoneVisualization()
-          break
-        default:
-          if (event.error !== 'aborted') {
-            setError(`Error: ${event.error}`)
-            setIsListening(false)
-            stopMicrophoneVisualization()
-          }
-      }
+    // Handle start
+    recognition.onstart = () => {
+      console.log('🎙️ Recognition started')
+      setRecognitionStatus('🎤 Listening... Speak now')
+      setError('')
+      startMicrophoneVisualization()
     }
 
+    // Handle end - THIS IS THE CRITICAL PART
     recognition.onend = () => {
-      console.log('Recognition ended, isListening:', isListening)
+      console.log('⏹️ Recognition ended, shouldRestart:', shouldRestartRef.current)
       
-      // CRITICAL WORKAROUND: Auto-restart if we're still supposed to be listening
-      if (isListening) {
-        console.log('Auto-restarting recognition...')
-        setRecognitionStatus('🔄 Restarting mic...')
-        
-        // Clear any pending restart
-        if (restartTimeoutRef.current) {
-          clearTimeout(restartTimeoutRef.current)
-        }
-        
-        // Delay restart to prevent browser throttling
-        restartTimeoutRef.current = setTimeout(() => {
-          if (isListening && recognitionRef.current) {
-            try {
-              recognitionRef.current.start()
-            } catch (err) {
-              console.error('Auto-restart failed:', err)
-              // If restart fails, stop listening state
-              setIsListening(false)
-              stopMicrophoneVisualization()
-              setError('Could not restart microphone. Please click Start again.')
-              setRecognitionStatus('Failed to restart')
-            }
-          }
-        }, 300) // 300ms delay helps prevent issues
+      if (shouldRestartRef.current) {
+        // Silently restart - this is what dictation.io does
+        setRecognitionStatus('🔄 Ready for more...')
+        restartRecognition()
       } else {
-        setRecognitionStatus('Stopped')
+        setRecognitionStatus('⏸️ Stopped')
         stopMicrophoneVisualization()
       }
     }
 
+    // Handle errors - SWALLOW non-critical errors like dictation.io
+    recognition.onerror = (event) => {
+      console.warn('⚠️ Recognition error:', event.error)
+      
+      // Dictation.io swallows these errors silently
+      switch (event.error) {
+        case 'no-speech':
+          // Don't show error - just update status quietly
+          setRecognitionStatus('🎤 Waiting for speech...')
+          // Still restart if needed
+          if (shouldRestartRef.current) {
+            restartRecognition()
+          }
+          break
+        case 'audio-capture':
+          setError('No microphone found.')
+          setRecognitionStatus('❌ No mic detected')
+          shouldRestartRef.current = false
+          setIsListening(false)
+          stopMicrophoneVisualization()
+          break
+        case 'not-allowed':
+          setError('Microphone access denied. Tap 🔒 → Allow microphone')
+          setRecognitionStatus('❌ Permission denied')
+          shouldRestartRef.current = false
+          setIsListening(false)
+          stopMicrophoneVisualization()
+          break
+        case 'aborted':
+          // Silent fail - just retry
+          if (shouldRestartRef.current) {
+            restartRecognition()
+          }
+          break
+        default:
+          // For unknown errors, don't break the experience
+          console.error('Unhandled error:', event.error)
+          if (shouldRestartRef.current) {
+            restartRecognition()
+          }
+      }
+    }
+
+    // Optional: Add sound detection for better UX
     recognition.onsoundstart = () => {
-      console.log('Sound detected')
-      setRecognitionStatus('🔊 Sound detected! Transcribing...')
+      setRecognitionStatus('🔊 Detecting speech...')
     }
-
-    recognition.onsoundend = () => {
-      console.log('Sound ended')
-      setRecognitionStatus('⏸️ Processing speech...')
-    }
-
-    recognition.onspeechstart = () => {
-      console.log('Speech started')
-      setRecognitionStatus('📝 Transcribing your words...')
-    }
-
+    
     recognition.onspeechend = () => {
-      console.log('Speech ended')
-      setRecognitionStatus('✍️ Capturing...')
+      setRecognitionStatus('⚙️ Processing...')
     }
 
     return recognition
-  }
+  }, [selectedLanguage, startMicrophoneVisualization, stopMicrophoneVisualization, restartRecognition])
 
+  // Initialize on mount
   useEffect(() => {
-    // Check browser support
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
       setError('Speech recognition not supported in this browser')
       return
     }
 
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setError('Your browser does not support microphone access.')
-      return
-    }
-
-    // Initialize recognition
     recognitionRef.current = initRecognition()
 
-    // Cleanup on unmount
     return () => {
       if (restartTimeoutRef.current) {
         clearTimeout(restartTimeoutRef.current)
@@ -259,59 +273,63 @@ function App() {
       }
       stopMicrophoneVisualization()
     }
-  }, [])
+  }, [initRecognition, stopMicrophoneVisualization])
 
-  // Re-initialize when language changes
+  // Handle language change
   useEffect(() => {
     if (recognitionRef.current) {
-      const wasListening = isListening
+      const wasListening = shouldRestartRef.current
       if (wasListening) {
-        // Temporarily stop listening
-        const oldRecognition = recognitionRef.current
-        recognitionRef.current = initRecognition()
+        // Gracefully stop
+        shouldRestartRef.current = false
         try {
-          oldRecognition.abort()
+          recognitionRef.current.stop()
         } catch (e) {}
-        // Restart after a delay
+        
+        // Create new recognition and restart
         setTimeout(() => {
-          if (wasListening && recognitionRef.current) {
+          recognitionRef.current = initRecognition()
+          if (wasListening) {
+            shouldRestartRef.current = true
             try {
               recognitionRef.current.start()
             } catch (err) {
               console.error('Failed to restart after language change:', err)
-              setIsListening(false)
             }
           }
-        }, 500)
+        }, 200)
       } else {
         recognitionRef.current = initRecognition()
       }
     }
-  }, [selectedLanguage])
+  }, [selectedLanguage, initRecognition])
 
   const startListening = async () => {
     if (!recognitionRef.current) {
       recognitionRef.current = initRecognition()
     }
 
-    // Clear any existing restart timeout
+    // Clear any existing state
     if (restartTimeoutRef.current) {
       clearTimeout(restartTimeoutRef.current)
     }
-
+    
     setError('')
-    setRecognitionStatus('🎤 Requesting microphone...')
+    setRecognitionStatus('🎤 Starting...')
+    shouldRestartRef.current = true
+    setIsListening(true)
     
     try {
-      // Request microphone permission first
+      // Request permission first
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      // Keep the stream for visualization, but recognition will use its own
+      stream.getTracks().forEach(track => track.stop())
       
-      // Start recognition
       recognitionRef.current.start()
-      setIsListening(true)
     } catch (err) {
       console.error('Permission error:', err)
+      shouldRestartRef.current = false
+      setIsListening(false)
+      
       if (err.name === 'NotAllowedError') {
         setError('Microphone access denied. Tap the 🔒 icon in address bar → Allow microphone → Refresh')
       } else if (err.name === 'NotFoundError') {
@@ -319,16 +337,18 @@ function App() {
       } else {
         setError(`Cannot access microphone: ${err.message}`)
       }
-      setIsListening(false)
       setRecognitionStatus('Failed to start')
     }
   }
 
   const stopListening = () => {
+    shouldRestartRef.current = false
     setIsListening(false)
+    
     if (restartTimeoutRef.current) {
       clearTimeout(restartTimeoutRef.current)
     }
+    
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop()
@@ -336,6 +356,7 @@ function App() {
         console.error('Stop error:', e)
       }
     }
+    
     setRecognitionStatus('Stopped')
   }
 
@@ -353,7 +374,7 @@ function App() {
   return (
     <div className="container">
       <h1>🎙️ Voice Recognition</h1>
-      <p className="subtitle">Continuous dictation - just keep speaking!</p>
+      <p className="subtitle">Just keep speaking - it never stops!</p>
 
       {error && (
         <div className="error-message">
@@ -361,7 +382,6 @@ function App() {
         </div>
       )}
 
-      {/* Language Selection */}
       <div className="language-selector">
         <label>🌍 Language:</label>
         <select
@@ -377,11 +397,13 @@ function App() {
           ))}
         </select>
         {isAndroid && (
-          <span className="android-badge">📱 Auto-restart mode active</span>
+          <span className="android-badge">📱 Continuous mode active</span>
+        )}
+        {restartCount > 0 && isListening && (
+          <span className="restart-badge">🔄 Auto-restarting seamlessly</span>
         )}
       </div>
 
-      {/* Microphone Level Bar */}
       <div className={`microphone-level-container ${isListening ? 'active' : ''}`}>
         <div className="level-label">
           <span>🎤 Microphone Level</span>
@@ -407,7 +429,6 @@ function App() {
         )}
       </div>
 
-      {/* Buttons */}
       <div className="button-group">
         <button 
           onClick={startListening} 
@@ -435,13 +456,12 @@ function App() {
 
       <div className="status">
         <span className="status-icon">{isListening ? '🔴' : '⚪'}</span>
-        Status: {isListening ? 'Listening (auto-restarting)' : 'Idle'}
+        Status: {isListening ? 'Continuously listening' : 'Idle'}
         <span className="language-badge">
           {languages.find(l => l.code === selectedLanguage)?.name || selectedLanguage}
         </span>
       </div>
 
-      {/* Transcript */}
       <div className="transcript-container">
         <h3>Recognized Text:</h3>
         <div className="transcript-box">
@@ -449,20 +469,19 @@ function App() {
         </div>
       </div>
 
-      {/* Instructions */}
       <div className="info">
-        <p>💡 How it works:</p>
+        <p>💡 How it works (like dictation.io):</p>
         <ul>
-          <li>✅ <strong>Just keep speaking</strong> - The mic restarts automatically!</li>
-          <li>🎤 The microphone level bar shows your input volume</li>
-          <li>🔄 Recognition restarts after each phrase (you won't notice)</li>
-          <li>📱 Works continuously on Android and desktop</li>
-          <li>🔊 Speak clearly - the app transcribes as you go</li>
+          <li>✅ <strong>Never stops</strong> - Auto-restarts silently in milliseconds</li>
+          <li>🎤 <strong>Just keep speaking</strong> - No need to press buttons between phrases</li>
+          <li>🔄 <strong>Seamless experience</strong> - You won't notice the restarts</li>
+          <li>📱 <strong>Works on Android</strong> - Same technology as dictation.io</li>
+          <li>⚡ <strong>Ultra-fast restart</strong> - Only 50ms delay between captures</li>
         </ul>
         <p className="note">
           {isAndroid 
-            ? "📱 On Android: The mic icon may blink briefly between phrases - that's normal!"
-            : "💻 On desktop: Works continuously without interruption!"}
+            ? "📱 On Android: The mic icon may flicker briefly - that's the auto-restart working perfectly!"
+            : "💻 On desktop: Works continuously without any interruption!"}
         </p>
       </div>
     </div>
