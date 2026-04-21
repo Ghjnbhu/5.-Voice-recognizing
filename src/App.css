@@ -76,30 +76,6 @@ h1 {
   cursor: not-allowed;
 }
 
-.diagnostic-box {
-  margin-bottom: 25px;
-  padding: 15px;
-  background: #fff8e1;
-  border-radius: 12px;
-  border-left: 4px solid #ff9800;
-}
-
-.diagnostic-text {
-  font-family: monospace;
-  font-size: 0.9rem;
-  color: #e65100;
-  margin-top: 8px;
-  padding: 8px;
-  background: rgba(255, 255, 255, 0.7);
-  border-radius: 6px;
-}
-
-.diagnostic-hint {
-  font-size: 0.75rem;
-  color: #ff9800;
-  margin-top: 8px;
-}
-
 .microphone-level-container {
   margin-bottom: 25px;
   padding: 15px;
@@ -131,6 +107,114 @@ h1 {
   height: 100%;
   transition: width 0.05s linear;
   border-radius: 10px;
+}
+
+.level-hint {
+  margin-top: 10px;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  text-align: center;
+  background: #fff3e0;
+  color: #e65100;
+}
+
+.level-hint.success {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+/* Visual Console - For Android */
+.visual-console {
+  margin-bottom: 25px;
+  border: 2px solid #ddd;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #1e1e1e;
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+}
+
+.console-header {
+  background: #2d2d2d;
+  color: #fff;
+  padding: 10px 15px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #444;
+}
+
+.console-clear {
+  background: #f44336;
+  color: white;
+  border: none;
+  padding: 4px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+
+.console-logs {
+  max-height: 250px;
+  overflow-y: auto;
+  background: #1e1e1e;
+}
+
+.console-empty {
+  padding: 20px;
+  text-align: center;
+  color: #888;
+  font-style: italic;
+}
+
+.console-log {
+  padding: 8px 12px;
+  border-bottom: 1px solid #333;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  font-size: 0.75rem;
+}
+
+.log-icon {
+  font-size: 0.9rem;
+  min-width: 24px;
+}
+
+.log-time {
+  color: #888;
+  font-size: 0.7rem;
+  min-width: 70px;
+}
+
+.log-message {
+  flex: 1;
+  color: #ddd;
+}
+
+.log-details {
+  color: #888;
+  font-size: 0.7rem;
+  font-style: italic;
+}
+
+.console-success .log-message {
+  color: #4caf50;
+}
+
+.console-error .log-message {
+  color: #f44336;
+}
+
+.console-warning .log-message {
+  color: #ff9800;
+}
+
+.console-info .log-message {
+  color: #2196f3;
 }
 
 .button-group {
@@ -184,6 +268,33 @@ h1 {
 .btn-clear:hover {
   background: #fb8c00;
   transform: translateY(-2px);
+}
+
+.status {
+  text-align: center;
+  padding: 12px;
+  margin-bottom: 20px;
+  font-weight: bold;
+  font-size: 1.1rem;
+  background: #f5f5f5;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.status-icon {
+  font-size: 1.2rem;
+}
+
+.language-badge {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
 }
 
 .transcript-container {
@@ -246,13 +357,13 @@ h1 {
   margin: 8px 0;
 }
 
-.info ul {
-  margin-left: 20px;
-  margin-top: 5px;
-}
-
-.info ul li {
-  margin: 4px 0;
+.note {
+  margin-top: 12px;
+  padding: 10px;
+  background: #fff3e0;
+  border-radius: 8px;
+  color: #e65100;
+  font-size: 0.85rem;
 }
 
 @media (max-width: 768px) {
@@ -283,5 +394,19 @@ h1 {
   
   .transcript-box {
     font-size: 1rem;
+  }
+  
+  .console-log {
+    font-size: 0.7rem;
+    gap: 6px;
+  }
+  
+  .log-time {
+    min-width: 60px;
+    font-size: 0.65rem;
+  }
+  
+  .console-logs {
+    max-height: 200px;
   }
 }
