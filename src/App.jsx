@@ -5,7 +5,99 @@ function App() {
   const [transcript, setTranscript] = useState('')
   const [isListening, setIsListening] = useState(false)
   const [error, setError] = useState('')
+  const [microphoneLevel, setMicrophoneLevel] = useState(0)
+  const [selectedLanguage, setSelectedLanguage] = useState('en-US')
   const recognitionRef = useRef(null)
+  const audioContextRef = useRef(null)
+  const mediaStreamRef = useRef(null)
+  const sourceNodeRef = useRef(null)
+  const analyserNodeRef = useRef(null)
+  const animationFrameRef = useRef(null)
+
+  // Language options
+  const languages = [
+    { code: 'en-US', name: 'English (US)' },
+    { code: 'en-GB', name: 'English (UK)' },
+    { code: 'es-ES', name: 'Spanish' },
+    { code: 'fr-FR', name: 'French' },
+    { code: 'de-DE', name: 'German' },
+    { code: 'it-IT', name: 'Italian' },
+    { code: 'pt-PT', name: 'Portuguese' },
+    { code: 'ru-RU', name: 'Russian' },
+    { code: 'ja-JP', name: 'Japanese' },
+    { code: 'ko-KR', name: 'Korean' },
+    { code: 'zh-CN', name: 'Chinese (Simplified)' },
+    { code: 'ar-EG', name: 'Arabic' },
+    { code: 'hi-IN', name: 'Hindi' },
+    { code: 'nl-NL', name: 'Dutch' },
+    { code: 'pl-PL', name: 'Polish' },
+    { code: 'tr-TR', name: 'Turkish' },
+  ]
+
+  // Update microphone level visualization
+  const updateMicrophoneLevel = () => {
+    if (!analyserNodeRef.current) return
+    
+    const dataArray = new Uint8Array(analyserNodeRef.current.frequencyBinCount)
+    analyserNodeRef.current.getByteTimeDomainData(dataArray)
+    
+    // Calculate average volume level
+    let sum = 0
+    for (let i = 0; i < dataArray.length; i++) {
+      const v = (dataArray[i] - 128) / 128
+      sum += v * v
+    }
+    let average = Math.sqrt(sum / dataArray.length) || 0
+    // Scale and smooth the level
+    const level = Math.min(100, Math.floor(average * 200))
+    setMicrophoneLevel(level)
+    
+    animationFrameRef.current = requestAnimationFrame(updateMicrophoneLevel)
+  }
+
+  // Start microphone for level visualization
+  const startMicrophoneVisualization = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      mediaStreamRef.current = stream
+      
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
+      analyserNodeRef.current = audioContextRef.current.createAnalyser()
+      analyserNodeRef.current.fftSize = 256
+      
+      sourceNodeRef.current = audioContextRef.current.createMediaStreamSource(stream)
+      sourceNodeRef.current.connect(analyserNodeRef.current)
+      
+      // Start audio context if suspended
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume()
+      }
+      
+      updateMicrophoneLevel()
+    } catch (err) {
+      console.error('Could not access microphone for visualization:', err)
+    }
+  }
+
+  // Stop microphone visualization
+  const stopMicrophoneVisualization = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current)
+    }
+    if (sourceNodeRef.current) {
+      sourceNodeRef.current.disconnect()
+    }
+    if (analyserNodeRef.current) {
+      analyserNodeRef.current.disconnect()
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close()
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop())
+    }
+    setMicrophoneLevel(0)
+  }
 
   useEffect(() => {
     // Check if browser supports speech recognition
@@ -19,7 +111,7 @@ function App() {
     recognitionRef.current = new SpeechRecognition()
     recognitionRef.current.continuous = true
     recognitionRef.current.interimResults = true
-    recognitionRef.current.lang = 'en-US'
+    recognitionRef.current.lang = selectedLanguage
 
     // Handle recognition results
     recognitionRef.current.onresult = (event) => {
@@ -64,10 +156,16 @@ function App() {
       }
       setError(errorMessage)
       setIsListening(false)
+      stopMicrophoneVisualization()
     }
 
     recognitionRef.current.onend = () => {
       setIsListening(false)
+      stopMicrophoneVisualization()
+    }
+
+    recognitionRef.current.onstart = () => {
+      startMicrophoneVisualization()
     }
 
     // Cleanup on component unmount
@@ -75,10 +173,11 @@ function App() {
       if (recognitionRef.current) {
         recognitionRef.current.stop()
       }
+      stopMicrophoneVisualization()
     }
-  }, [])
+  }, [selectedLanguage]) // Re-initialize when language changes
 
-  const startListening = () => {
+  const startListening = async () => {
     if (!recognitionRef.current) {
       setError('Speech recognition not supported')
       return
@@ -86,14 +185,22 @@ function App() {
 
     setError('')
     setTranscript('')
-    recognitionRef.current.start()
-    setIsListening(true)
+    
+    try {
+      // Request microphone permission first
+      await navigator.mediaDevices.getUserMedia({ audio: true })
+      recognitionRef.current.start()
+      setIsListening(true)
+    } catch (err) {
+      setError('Microphone access denied. Please allow microphone access and try again.')
+    }
   }
 
   const stopListening = () => {
     if (recognitionRef.current) {
       recognitionRef.current.stop()
       setIsListening(false)
+      stopMicrophoneVisualization()
     }
   }
 
@@ -101,23 +208,24 @@ function App() {
     setTranscript('')
   }
 
-  
-  // Add at the top of your App component
-useEffect(() => {
-  const originalError = console.error;
-  console.error = (...args) => {
-    if (args[0]?.includes?.('microphone') || args[0]?.includes?.('Microphone')) {
-      console.log('Caught microphone error (non-critical):', args[0]);
-      return;
+  const handleLanguageChange = (event) => {
+    const newLanguage = event.target.value
+    setSelectedLanguage(newLanguage)
+    // If currently listening, restart with new language
+    if (isListening) {
+      stopListening()
+      setTimeout(() => {
+        startListening()
+      }, 100)
     }
-    originalError.apply(console, args);
-  };
-  
-  return () => {
-    console.error = originalError;
-  };
-}, []);
+  }
 
+  // Get color for microphone level bar
+  const getLevelColor = () => {
+    if (microphoneLevel < 30) return 'var(--level-low)'
+    if (microphoneLevel < 70) return 'var(--level-medium)'
+    return 'var(--level-high)'
+  }
 
   return (
     <div className="container">
@@ -127,6 +235,49 @@ useEffect(() => {
       {error && (
         <div className="error-message">
           ⚠️ {error}
+        </div>
+      )}
+
+      {/* Language Selection Dropdown */}
+      <div className="language-selector">
+        <label htmlFor="language">🌍 Recognition Language:</label>
+        <select
+          id="language"
+          value={selectedLanguage}
+          onChange={handleLanguageChange}
+          disabled={isListening}
+          className="language-dropdown"
+        >
+          {languages.map(lang => (
+            <option key={lang.code} value={lang.code}>
+              {lang.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Microphone Level Bar */}
+      {isListening && (
+        <div className="microphone-level-container">
+          <div className="level-label">
+            <span>🎤 Microphone Level</span>
+            <span className="level-percentage">{microphoneLevel}%</span>
+          </div>
+          <div className="level-bar-bg">
+            <div 
+              className="level-bar-fill"
+              style={{ 
+                width: `${microphoneLevel}%`,
+                backgroundColor: getLevelColor(),
+                transition: 'width 0.05s linear'
+              }}
+            />
+          </div>
+          <div className="level-tips">
+            <span>🔇 Quiet</span>
+            <span>🎙️ Normal</span>
+            <span>📢 Loud</span>
+          </div>
         </div>
       )}
 
@@ -157,6 +308,9 @@ useEffect(() => {
 
       <div className="status">
         Status: {isListening ? '🔴 Listening...' : '⚪ Idle'}
+        {isListening && selectedLanguage && (
+          <span className="language-badge"> 🗣️ {languages.find(l => l.code === selectedLanguage)?.name}</span>
+        )}
       </div>
 
       <div className="transcript-container">
@@ -171,8 +325,9 @@ useEffect(() => {
         <ul>
           <li>Make sure your microphone is connected and allowed</li>
           <li>Speak clearly and at a normal pace</li>
+          <li>The microphone level bar shows your input volume in real-time</li>
+          <li>Change language anytime - recognition will adapt automatically</li>
           <li>Works best in Chrome, Edge, or Safari</li>
-          <li>Supports multiple languages (change the 'lang' property in code)</li>
         </ul>
       </div>
     </div>
