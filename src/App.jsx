@@ -14,9 +14,12 @@ function App() {
   const mediaStreamRef = useRef(null)
   const analyserNodeRef = useRef(null)
   const animationFrameRef = useRef(null)
+  const restartTimeoutRef = useRef(null)
+  const shouldRestartRef = useRef(false)
 
   const languages = [
     { code: 'en-US', name: 'English (US)' },
+    { code: 'en-GB', name: 'English (UK)' },
     { code: 'es-ES', name: 'Español' },
     { code: 'fr-FR', name: 'Français' },
     { code: 'de-DE', name: 'Deutsch' },
@@ -28,7 +31,7 @@ function App() {
     { code: 'zh-CN', name: '中文' },
   ]
 
-  // Add diagnostic log (visible on screen for Android)
+  // Add diagnostic log
   const addDiagnosticLog = (type, message, details = '') => {
     const timestamp = new Date().toLocaleTimeString()
     const log = { type, message, details, timestamp }
@@ -59,7 +62,7 @@ function App() {
       addDiagnosticLog('INFO', 'Requesting microphone access...')
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       mediaStreamRef.current = stream
-      addDiagnosticLog('SUCCESS', 'Microphone access granted!', 'Level bar will move when you speak')
+      addDiagnosticLog('SUCCESS', 'Microphone access granted!')
       audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
       analyserNodeRef.current = audioContextRef.current.createAnalyser()
       analyserNodeRef.current.fftSize = 256
@@ -70,9 +73,7 @@ function App() {
       }
       updateMicrophoneLevel()
     } catch (err) {
-      console.error('Visualization error:', err)
       addDiagnosticLog('ERROR', 'Microphone access failed', err.message)
-      setError('Microphone access denied. Tap the 🔒 icon in address bar and allow microphone.')
     }
   }, [updateMicrophoneLevel])
 
@@ -83,11 +84,44 @@ function App() {
     setMicrophoneLevel(0)
   }, [])
 
+  // Core: Auto-restart function (like dictation.io)
+  const restartRecognition = useCallback(() => {
+    if (!shouldRestartRef.current) return
+    
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current)
+    }
+    
+    restartTimeoutRef.current = setTimeout(() => {
+      if (shouldRestartRef.current && recognitionRef.current) {
+        try {
+          addDiagnosticLog('INFO', '🔄 Auto-restarting recognition...', 'Continuous mode active')
+          recognitionRef.current.start()
+        } catch (err) {
+          addDiagnosticLog('ERROR', 'Auto-restart failed', err.message)
+          if (shouldRestartRef.current) {
+            restartTimeoutRef.current = setTimeout(() => {
+              if (shouldRestartRef.current && recognitionRef.current) {
+                try {
+                  recognitionRef.current.start()
+                } catch (e) {
+                  addDiagnosticLog('ERROR', 'Second restart failed', 'Tap Start manually')
+                  shouldRestartRef.current = false
+                  setIsListening(false)
+                }
+              }
+            }, 1000)
+          }
+        }
+      }
+    }, 100)
+  }, [])
+
   // Initialize speech recognition
   const initRecognition = useCallback(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SpeechRecognition) {
-      addDiagnosticLog('ERROR', 'Speech recognition not supported', 'Try Chrome or Edge')
+      addDiagnosticLog('ERROR', 'Speech recognition not supported')
       setError('Speech recognition not supported')
       return null
     }
@@ -97,51 +131,64 @@ function App() {
     recognition.continuous = false
     recognition.interimResults = true
     recognition.lang = selectedLanguage
+    recognition.maxAlternatives = 1
 
     recognition.onstart = () => {
-      addDiagnosticLog('SUCCESS', '🎤 Recognition started!', 'Speak clearly into your microphone')
+      addDiagnosticLog('SUCCESS', '🎤 Recognition started!', 'Speak continuously')
       startMicrophoneVisualization()
     }
 
     recognition.onresult = (event) => {
-      addDiagnosticLog('SUCCESS', `📝 Results received!`, `${event.results.length} result(s)`)
-      
       let finalText = ''
+      
       for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i]
         const text = result[0].transcript
-        addDiagnosticLog('INFO', `Text detected: "${text}"`, result.isFinal ? 'Final' : 'Interim')
         if (result.isFinal) {
           finalText += text + ' '
+          addDiagnosticLog('SUCCESS', `📝 Captured: "${text}"`, 'Added to transcript')
+        } else {
+          addDiagnosticLog('INFO', `🎤 Hearing: "${text}"`, 'Interim result')
         }
       }
       
       if (finalText) {
-        addDiagnosticLog('SUCCESS', `✅ Added to transcript!`, `"${finalText.trim()}"`)
         setTranscript(prev => prev + finalText)
       }
     }
 
     recognition.onerror = (event) => {
-      addDiagnosticLog('ERROR', `Recognition error: ${event.error}`, 'See troubleshooting below')
+      addDiagnosticLog('WARNING', `Recognition event: ${event.error}`, 'Auto-restarting...')
       
-      if (event.error === 'not-allowed') {
+      // Swallow errors and auto-restart (like dictation.io)
+      if (event.error === 'no-speech') {
+        addDiagnosticLog('INFO', 'No speech detected, still listening...', 'Speak louder')
+      } else if (event.error === 'aborted') {
+        addDiagnosticLog('INFO', 'Recognition aborted, restarting...', '')
+      } else if (event.error === 'not-allowed') {
         setError('Microphone access denied. Tap 🔒 → Allow microphone')
-      } else if (event.error === 'no-speech') {
-        addDiagnosticLog('WARNING', 'No speech detected', 'Try speaking louder or check microphone')
+        shouldRestartRef.current = false
+        setIsListening(false)
       } else if (event.error === 'audio-capture') {
-        setError('No microphone found. Please connect a microphone.')
+        setError('No microphone found.')
+        shouldRestartRef.current = false
+        setIsListening(false)
       }
     }
 
     recognition.onend = () => {
-      addDiagnosticLog('INFO', 'Recognition session ended', 'Click Start again to continue')
-      setIsListening(false)
-      stopMicrophoneVisualization()
+      addDiagnosticLog('INFO', 'Recognition session ended', shouldRestartRef.current ? 'Auto-restarting...' : 'Stopped')
+      
+      if (shouldRestartRef.current) {
+        restartRecognition()
+      } else {
+        setIsListening(false)
+        stopMicrophoneVisualization()
+      }
     }
 
     recognition.onsoundstart = () => {
-      addDiagnosticLog('SUCCESS', '🔊 Sound detected!', 'Processing your speech...')
+      addDiagnosticLog('SUCCESS', '🔊 Sound detected!', 'Processing speech')
     }
 
     recognition.onspeechend = () => {
@@ -149,48 +196,77 @@ function App() {
     }
 
     return recognition
-  }, [selectedLanguage, startMicrophoneVisualization, stopMicrophoneVisualization])
+  }, [selectedLanguage, startMicrophoneVisualization, stopMicrophoneVisualization, restartRecognition])
 
+  // Initialize on mount
   useEffect(() => {
     recognitionRef.current = initRecognition()
-    addDiagnosticLog('INFO', 'App ready', 'Tap Start Listening to begin')
+    addDiagnosticLog('INFO', 'App ready', 'Tap Start Listening - it will never stop!')
     return () => {
+      if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
       if (recognitionRef.current) recognitionRef.current.abort()
       stopMicrophoneVisualization()
     }
   }, [initRecognition, stopMicrophoneVisualization])
 
+  // Handle language change
+  useEffect(() => {
+    if (recognitionRef.current) {
+      const wasListening = shouldRestartRef.current
+      if (wasListening) {
+        shouldRestartRef.current = false
+        try { recognitionRef.current.stop() } catch(e) {}
+        setTimeout(() => {
+          recognitionRef.current = initRecognition()
+          if (wasListening) {
+            shouldRestartRef.current = true
+            try { recognitionRef.current.start() } catch(e) {}
+          }
+        }, 200)
+      } else {
+        recognitionRef.current = initRecognition()
+      }
+    }
+  }, [selectedLanguage, initRecognition])
+
   const startListening = async () => {
     setError('')
     setTranscript('')
-    addDiagnosticLog('INFO', 'Start button pressed', 'Requesting microphone permission...')
+    addDiagnosticLog('INFO', '▶️ Start button pressed', 'Continuous mode enabled')
     
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       stream.getTracks().forEach(track => track.stop())
-      addDiagnosticLog('SUCCESS', 'Microphone permission granted', 'Starting recognition...')
+      
+      shouldRestartRef.current = true
       recognitionRef.current.start()
       setIsListening(true)
+      addDiagnosticLog('SUCCESS', 'Continuous listening active', 'Speak - it will auto-restart')
     } catch (err) {
       addDiagnosticLog('ERROR', 'Microphone permission failed', err.message)
-      setError(`Microphone error: ${err.message}. Tap the 🔒 icon and allow microphone access.`)
+      setError(`Microphone error: ${err.message}. Tap 🔒 and allow microphone.`)
     }
   }
 
   const stopListening = () => {
-    recognitionRef.current?.stop()
+    addDiagnosticLog('INFO', '⏹️ Stop button pressed', 'Continuous mode disabled')
+    shouldRestartRef.current = false
     setIsListening(false)
-    addDiagnosticLog('INFO', 'Stopped by user', 'Recognition ended')
+    
+    if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop() } catch(e) {}
+    }
   }
 
   const clearText = () => {
     setTranscript('')
-    addDiagnosticLog('INFO', 'Text cleared', 'Transcript reset')
+    addDiagnosticLog('INFO', 'Text cleared', '')
   }
 
   const clearLogs = () => {
     setDiagnosticLogs([])
-    addDiagnosticLog('INFO', 'Logs cleared', 'Diagnostic history reset')
+    addDiagnosticLog('INFO', 'Logs cleared', '')
   }
 
   const getLevelColor = () => {
@@ -212,7 +288,7 @@ function App() {
   return (
     <div className="container">
       <h1>🎙️ Voice Recognition</h1>
-      <p className="subtitle">Android Diagnostic Mode - Visual Console</p>
+      <p className="subtitle">Continuous Dictation - Like dictation.io - Never Stops!</p>
 
       {error && <div className="error-message">⚠️ {error}</div>}
 
@@ -240,15 +316,15 @@ function App() {
         )}
       </div>
 
-      {/* Visual Console - For Android (replaces F12) */}
+      {/* Visual Console - Live Diagnostics */}
       <div className="visual-console">
         <div className="console-header">
-          <strong>📱 Visual Console (Live Diagnostics)</strong>
+          <strong>📱 Live Console (Auto-restart active)</strong>
           <button onClick={clearLogs} className="console-clear">Clear</button>
         </div>
         <div className="console-logs">
           {diagnosticLogs.length === 0 ? (
-            <div className="console-empty">Tap "Start Listening" to begin diagnostics...</div>
+            <div className="console-empty">Tap "Start Listening" - it will never stop!</div>
           ) : (
             diagnosticLogs.map((log, idx) => (
               <div key={idx} className={`console-log console-${log.type.toLowerCase()}`}>
@@ -263,32 +339,32 @@ function App() {
       </div>
 
       <div className="button-group">
-        <button onClick={startListening} disabled={isListening} className="btn btn-start">🎤 Start Listening</button>
+        <button onClick={startListening} disabled={isListening} className="btn btn-start">🎤 Start Listening (Continuous)</button>
         <button onClick={stopListening} disabled={!isListening} className="btn btn-stop">⏹️ Stop</button>
         <button onClick={clearText} className="btn btn-clear">🗑️ Clear Text</button>
       </div>
 
       <div className="status">
         <span className="status-icon">{isListening ? '🔴' : '⚪'}</span>
-        Status: {isListening ? 'Listening...' : 'Idle'}
+        Status: {isListening ? '🔁 Continuous Listening (auto-restarts)' : 'Idle'}
         <span className="language-badge">{languages.find(l => l.code === selectedLanguage)?.name || selectedLanguage}</span>
       </div>
 
       <div className="transcript-container">
         <h3>Recognized Text:</h3>
-        <div className="transcript-box">{transcript || 'Press Start and speak...'}</div>
+        <div className="transcript-box">{transcript || 'Press Start and just keep speaking...'}</div>
       </div>
 
       <div className="info">
-        <p>📱 <strong>Android Troubleshooting:</strong></p>
+        <p>🎤 <strong>How it works (like dictation.io):</strong></p>
         <ol>
-          <li><strong>Microphone level bar moving?</strong> → Your mic is working!</li>
-          <li><strong>See "✅ Results received" in console?</strong> → API is working!</li>
-          <li><strong>See "❌ no-speech" error?</strong> → Speak louder or check mic</li>
-          <li><strong>No "✅ Results received"?</strong> → Google servers not responding (network issue)</li>
-          <li><strong>Permission denied?</strong> → Tap 🔒 in address bar → Allow microphone</li>
+          <li><strong>Press Start once</strong> - Then just keep speaking!</li>
+          <li><strong>Auto-restart</strong> - Mic restarts silently after each phrase</li>
+          <li><strong>Never stops</strong> - No need to press anything between sentences</li>
+          <li><strong>Watch the console</strong> - See "🔄 Auto-restarting" messages</li>
+          <li><strong>Microphone level</strong> - Shows your input volume in real-time</li>
         </ol>
-        <p className="note">💡 The visual console above shows everything that would appear in F12 on desktop!</p>
+        <p className="note">💡 The mic auto-restarts after each phrase - you won't notice it! Just keep talking.</p>
       </div>
     </div>
   )
