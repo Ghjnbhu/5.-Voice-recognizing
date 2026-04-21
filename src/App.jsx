@@ -7,31 +7,36 @@ function App() {
   const [error, setError] = useState('')
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
   const [selectedLanguage, setSelectedLanguage] = useState('en-US')
+  const [interimTranscript, setInterimTranscript] = useState('')
+  const [recognitionStatus, setRecognitionStatus] = useState('')
   const recognitionRef = useRef(null)
   const audioContextRef = useRef(null)
   const mediaStreamRef = useRef(null)
   const sourceNodeRef = useRef(null)
   const analyserNodeRef = useRef(null)
   const animationFrameRef = useRef(null)
+  const restartTimeoutRef = useRef(null)
 
   // Language options
   const languages = [
     { code: 'en-US', name: 'English (US)' },
     { code: 'en-GB', name: 'English (UK)' },
-    { code: 'es-ES', name: 'Spanish' },
-    { code: 'fr-FR', name: 'French' },
-    { code: 'de-DE', name: 'German' },
-    { code: 'it-IT', name: 'Italian' },
-    { code: 'pt-PT', name: 'Portuguese' },
-    { code: 'ru-RU', name: 'Russian' },
-    { code: 'ja-JP', name: 'Japanese' },
-    { code: 'ko-KR', name: 'Korean' },
-    { code: 'zh-CN', name: 'Chinese (Simplified)' },
-    { code: 'ar-EG', name: 'Arabic' },
-    { code: 'hi-IN', name: 'Hindi' },
-    { code: 'nl-NL', name: 'Dutch' },
-    { code: 'pl-PL', name: 'Polish' },
-    { code: 'tr-TR', name: 'Turkish' },
+    { code: 'es-ES', name: 'Español (Spanish)' },
+    { code: 'fr-FR', name: 'Français (French)' },
+    { code: 'de-DE', name: 'Deutsch (German)' },
+    { code: 'it-IT', name: 'Italiano (Italian)' },
+    { code: 'pt-PT', name: 'Português (Portuguese)' },
+    { code: 'pt-BR', name: 'Português (Brazil)' },
+    { code: 'ru-RU', name: 'Русский (Russian)' },
+    { code: 'ja-JP', name: '日本語 (Japanese)' },
+    { code: 'ko-KR', name: '한국어 (Korean)' },
+    { code: 'zh-CN', name: '中文 (Chinese Simplified)' },
+    { code: 'zh-TW', name: '中文 (Chinese Traditional)' },
+    { code: 'ar-EG', name: 'العربية (Arabic)' },
+    { code: 'hi-IN', name: 'हिन्दी (Hindi)' },
+    { code: 'nl-NL', name: 'Nederlands (Dutch)' },
+    { code: 'pl-PL', name: 'Polski (Polish)' },
+    { code: 'tr-TR', name: 'Türkçe (Turkish)' },
   ]
 
   // Update microphone level visualization
@@ -41,14 +46,12 @@ function App() {
     const dataArray = new Uint8Array(analyserNodeRef.current.frequencyBinCount)
     analyserNodeRef.current.getByteTimeDomainData(dataArray)
     
-    // Calculate average volume level
     let sum = 0
     for (let i = 0; i < dataArray.length; i++) {
       const v = (dataArray[i] - 128) / 128
       sum += v * v
     }
     let average = Math.sqrt(sum / dataArray.length) || 0
-    // Scale and smooth the level
     const level = Math.min(100, Math.floor(average * 200))
     setMicrophoneLevel(level)
     
@@ -68,7 +71,6 @@ function App() {
       sourceNodeRef.current = audioContextRef.current.createMediaStreamSource(stream)
       sourceNodeRef.current.connect(analyserNodeRef.current)
       
-      // Start audio context if suspended
       if (audioContextRef.current.state === 'suspended') {
         await audioContextRef.current.resume()
       }
@@ -79,7 +81,6 @@ function App() {
     }
   }
 
-  // Stop microphone visualization
   const stopMicrophoneVisualization = () => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current)
@@ -99,133 +100,249 @@ function App() {
     setMicrophoneLevel(0)
   }
 
+  // Initialize speech recognition
+  const initRecognition = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) {
+      setError('Speech recognition not supported in this browser')
+      return null
+    }
+
+    const recognition = new SpeechRecognition()
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.lang = selectedLanguage
+    recognition.maxAlternatives = 1
+
+    // Handle results
+    recognition.onresult = (event) => {
+      console.log('Results received:', event.results)
+      let currentInterim = ''
+      let currentFinal = ''
+
+      for (let i = 0; i < event.results.length; i++) {
+        const result = event.results[i]
+        const transcriptText = result[0].transcript
+        
+        if (result.isFinal) {
+          currentFinal += transcriptText + ' '
+          console.log('Final:', transcriptText)
+        } else {
+          currentInterim += transcriptText
+          console.log('Interim:', transcriptText)
+        }
+      }
+
+      if (currentFinal) {
+        setTranscript(prev => prev + currentFinal)
+        setInterimTranscript('')
+      } else if (currentInterim) {
+        setInterimTranscript(currentInterim)
+      }
+    }
+
+    // Handle start
+    recognition.onstart = () => {
+      console.log('Recognition started')
+      setRecognitionStatus('Listening for speech...')
+      setError('')
+      startMicrophoneVisualization()
+    }
+
+    // Handle end
+    recognition.onend = () => {
+      console.log('Recognition ended')
+      if (isListening) {
+        // Auto-restart if we were supposed to be listening
+        setRecognitionStatus('Restarting...')
+        if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
+        restartTimeoutRef.current = setTimeout(() => {
+          if (isListening) {
+            try {
+              recognition.start()
+            } catch (e) {
+              console.error('Failed to restart:', e)
+              setIsListening(false)
+              setRecognitionStatus('Stopped')
+            }
+          }
+        }, 100)
+      } else {
+        setRecognitionStatus('Stopped')
+        stopMicrophoneVisualization()
+      }
+    }
+
+    // Handle errors
+    recognition.onerror = (event) => {
+      console.error('Recognition error:', event.error)
+      let errorMessage = ''
+      
+      switch (event.error) {
+        case 'no-speech':
+          errorMessage = 'No speech detected. Please speak into the microphone.'
+          setRecognitionStatus('No speech detected - try speaking louder')
+          break
+        case 'audio-capture':
+          errorMessage = 'No microphone found. Please check your connection.'
+          setRecognitionStatus('Microphone error')
+          break
+        case 'not-allowed':
+          errorMessage = 'Microphone access denied. Please allow access.'
+          setRecognitionStatus('Permission denied')
+          break
+        case 'network':
+          errorMessage = 'Network error. Please check your connection.'
+          setRecognitionStatus('Network error')
+          break
+        case 'aborted':
+          errorMessage = 'Recognition was aborted.'
+          setRecognitionStatus('Aborted')
+          break
+        case 'language-not-supported':
+          errorMessage = `Language ${selectedLanguage} may not be fully supported.`
+          setRecognitionStatus('Language not fully supported')
+          break
+        default:
+          errorMessage = `Error: ${event.error}`
+          setRecognitionStatus('Error occurred')
+      }
+      
+      if (errorMessage) setError(errorMessage)
+    }
+
+    // Handle sound start
+    recognition.onsoundstart = () => {
+      console.log('Sound detected')
+      setRecognitionStatus('Sound detected - processing speech...')
+    }
+
+    // Handle sound end
+    recognition.onsoundend = () => {
+      console.log('Sound ended')
+      setRecognitionStatus('Waiting for speech...')
+    }
+
+    // Handle speech start
+    recognition.onspeechstart = () => {
+      console.log('Speech started')
+      setRecognitionStatus('Speech detected - transcribing...')
+    }
+
+    // Handle speech end
+    recognition.onspeechend = () => {
+      console.log('Speech ended')
+      setRecognitionStatus('Processing...')
+    }
+
+    return recognition
+  }
+
   useEffect(() => {
-    // Check if browser supports speech recognition
+    // Check browser support
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
       setError('Your browser does not support speech recognition. Please use Chrome, Edge, or Safari.')
       return
     }
 
-    // Initialize speech recognition
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-    recognitionRef.current = new SpeechRecognition()
-    recognitionRef.current.continuous = true
-    recognitionRef.current.interimResults = true
-    recognitionRef.current.lang = selectedLanguage
-
-    // Handle recognition results
-    recognitionRef.current.onresult = (event) => {
-      let interimTranscript = ''
-      let finalTranscript = ''
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcriptPart = event.results[i][0].transcript
-        if (event.results[i].isFinal) {
-          finalTranscript += transcriptPart + ' '
-        } else {
-          interimTranscript += transcriptPart
-        }
-      }
-
-      if (finalTranscript) {
-        setTranscript(prev => prev + finalTranscript)
-      } else if (interimTranscript) {
-        setTranscript(prev => prev + interimTranscript)
-      }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setError('Your browser does not support microphone access.')
+      return
     }
 
-    // Handle errors
-    recognitionRef.current.onerror = (event) => {
-      console.error('Speech recognition error:', event.error)
-      let errorMessage = ''
-      switch (event.error) {
-        case 'not-allowed':
-          errorMessage = 'Microphone access denied. Please allow microphone access and try again.'
-          break
-        case 'no-speech':
-          errorMessage = 'No speech detected. Please try again.'
-          break
-        case 'audio-capture':
-          errorMessage = 'No microphone found. Please connect a microphone.'
-          break
-        case 'network':
-          errorMessage = 'Network error occurred. Please check your connection.'
-          break
-        default:
-          errorMessage = `Error: ${event.error}`
-      }
-      setError(errorMessage)
-      setIsListening(false)
-      stopMicrophoneVisualization()
-    }
-
-    recognitionRef.current.onend = () => {
-      setIsListening(false)
-      stopMicrophoneVisualization()
-    }
-
-    recognitionRef.current.onstart = () => {
-      startMicrophoneVisualization()
-    }
-
-    // Cleanup on component unmount
+    // Cleanup on unmount
     return () => {
       if (recognitionRef.current) {
-        recognitionRef.current.stop()
+        try {
+          recognitionRef.current.stop()
+        } catch (e) {}
+      }
+      if (restartTimeoutRef.current) {
+        clearTimeout(restartTimeoutRef.current)
       }
       stopMicrophoneVisualization()
     }
-  }, [selectedLanguage]) // Re-initialize when language changes
+  }, [])
+
+  // Re-initialize when language changes
+  useEffect(() => {
+    if (recognitionRef.current) {
+      const wasListening = isListening
+      if (wasListening) {
+        stopListening()
+        setTimeout(() => {
+          recognitionRef.current = initRecognition()
+          if (wasListening) startListening()
+        }, 200)
+      } else {
+        recognitionRef.current = initRecognition()
+      }
+    } else {
+      recognitionRef.current = initRecognition()
+    }
+  }, [selectedLanguage])
 
   const startListening = async () => {
     if (!recognitionRef.current) {
-      setError('Speech recognition not supported')
-      return
+      recognitionRef.current = initRecognition()
     }
 
     setError('')
     setTranscript('')
+    setInterimTranscript('')
+    setIsListening(true)
     
     try {
       // Request microphone permission first
       await navigator.mediaDevices.getUserMedia({ audio: true })
       recognitionRef.current.start()
-      setIsListening(true)
     } catch (err) {
-      setError('Microphone access denied. Please allow microphone access and try again.')
+      console.error('Microphone permission error:', err)
+      if (err.name === 'NotAllowedError') {
+        setError('Microphone access denied. Please click the microphone icon in your browser address bar and allow access.')
+      } else if (err.name === 'NotFoundError') {
+        setError('No microphone found. Please connect a microphone to your computer.')
+      } else {
+        setError(`Cannot access microphone: ${err.message}`)
+      }
+      setIsListening(false)
     }
   }
 
   const stopListening = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop()
-      setIsListening(false)
-      stopMicrophoneVisualization()
+    setIsListening(false)
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current)
     }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop()
+      } catch (e) {
+        console.error('Error stopping recognition:', e)
+      }
+    }
+    stopMicrophoneVisualization()
+    setRecognitionStatus('Stopped')
   }
 
   const clearText = () => {
     setTranscript('')
+    setInterimTranscript('')
   }
 
   const handleLanguageChange = (event) => {
-    const newLanguage = event.target.value
-    setSelectedLanguage(newLanguage)
-    // If currently listening, restart with new language
-    if (isListening) {
-      stopListening()
-      setTimeout(() => {
-        startListening()
-      }, 100)
-    }
+    setSelectedLanguage(event.target.value)
   }
 
-  // Get color for microphone level bar
   const getLevelColor = () => {
-    if (microphoneLevel < 30) return 'var(--level-low)'
-    if (microphoneLevel < 70) return 'var(--level-medium)'
+    if (microphoneLevel < 20) return 'var(--level-low)'
+    if (microphoneLevel < 50) return 'var(--level-medium-low)'
+    if (microphoneLevel < 80) return 'var(--level-medium)'
     return 'var(--level-high)'
   }
+
+  // Display text (interim + final)
+  const displayText = transcript + (interimTranscript ? (transcript ? ' ' : '') + interimTranscript : '')
 
   return (
     <div className="container">
@@ -257,29 +374,30 @@ function App() {
       </div>
 
       {/* Microphone Level Bar */}
-      {isListening && (
-        <div className="microphone-level-container">
-          <div className="level-label">
-            <span>🎤 Microphone Level</span>
-            <span className="level-percentage">{microphoneLevel}%</span>
-          </div>
-          <div className="level-bar-bg">
-            <div 
-              className="level-bar-fill"
-              style={{ 
-                width: `${microphoneLevel}%`,
-                backgroundColor: getLevelColor(),
-                transition: 'width 0.05s linear'
-              }}
-            />
-          </div>
-          <div className="level-tips">
-            <span>🔇 Quiet</span>
-            <span>🎙️ Normal</span>
-            <span>📢 Loud</span>
-          </div>
+      <div className={`microphone-level-container ${isListening ? 'active' : 'inactive'}`}>
+        <div className="level-label">
+          <span>🎤 Microphone Level</span>
+          <span className="level-percentage">
+            {isListening ? `${microphoneLevel}%` : '—%'}
+          </span>
         </div>
-      )}
+        <div className="level-bar-bg">
+          <div 
+            className="level-bar-fill"
+            style={{ 
+              width: isListening ? `${microphoneLevel}%` : '0%',
+              backgroundColor: getLevelColor(),
+              transition: 'width 0.05s linear'
+            }}
+          />
+        </div>
+        {isListening && (
+          <div className="recognition-status">
+            <span className="status-dot"></span>
+            {recognitionStatus || 'Listening...'}
+          </div>
+        )}
+      </div>
 
       <div className="button-group">
         <button 
@@ -307,27 +425,36 @@ function App() {
       </div>
 
       <div className="status">
-        Status: {isListening ? '🔴 Listening...' : '⚪ Idle'}
-        {isListening && selectedLanguage && (
-          <span className="language-badge"> 🗣️ {languages.find(l => l.code === selectedLanguage)?.name}</span>
+        <span className="status-icon">{isListening ? '🔴' : '⚪'}</span>
+        Status: {isListening ? 'Listening...' : 'Idle'}
+        {selectedLanguage && (
+          <span className="language-badge">
+            🗣️ {languages.find(l => l.code === selectedLanguage)?.name || selectedLanguage}
+          </span>
         )}
       </div>
 
       <div className="transcript-container">
         <h3>Recognized Text:</h3>
         <div className="transcript-box">
-          {transcript || 'Click "Start Listening" and speak into your microphone...'}
+          {displayText || 'Click "Start Listening" and speak into your microphone...'}
         </div>
       </div>
 
       <div className="info">
-        <p>💡 Tips:</p>
+        <p>💡 Troubleshooting Tips:</p>
         <ul>
-          <li>Make sure your microphone is connected and allowed</li>
-          <li>Speak clearly and at a normal pace</li>
-          <li>The microphone level bar shows your input volume in real-time</li>
-          <li>Change language anytime - recognition will adapt automatically</li>
-          <li>Works best in Chrome, Edge, or Safari</li>
+          <li><strong>Microphone level bar moves?</strong> ✓ Good - your mic is working!</li>
+          <li><strong>No text appearing?</strong> Try these fixes:</li>
+          <ul>
+            <li>Speak louder and more clearly</li>
+            <li>Check if your microphone isn't muted in Windows</li>
+            <li>Try a different language (some work better than others)</li>
+            <li>Close and reopen the browser tab</li>
+            <li>Try Chrome browser if using Edge</li>
+          </ul>
+          <li><strong>Test your microphone:</strong> <a href="https://webmictest.com/" target="_blank" rel="noopener noreferrer">webmictest.com</a></li>
+          <li>Works best in Chrome browser</li>
         </ul>
       </div>
     </div>
