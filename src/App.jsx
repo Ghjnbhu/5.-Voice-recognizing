@@ -16,6 +16,7 @@ function App() {
   const analyserNodeRef = useRef(null)
   const animationFrameRef = useRef(null)
   const restartTimeoutRef = useRef(null)
+  const isAndroid = useRef(/Android/i.test(navigator.userAgent))
 
   // Language options
   const languages = [
@@ -109,35 +110,54 @@ function App() {
     }
 
     const recognition = new SpeechRecognition()
-    recognition.continuous = true
-    recognition.interimResults = true
+    
+    // Android-specific settings
+    if (isAndroid.current) {
+      recognition.continuous = false  // Android works better with continuous=false
+      recognition.interimResults = true
+    } else {
+      recognition.continuous = true
+      recognition.interimResults = true
+    }
+    
     recognition.lang = selectedLanguage
     recognition.maxAlternatives = 1
 
     // Handle results
     recognition.onresult = (event) => {
       console.log('Results received:', event.results)
-      let currentInterim = ''
-      let currentFinal = ''
+      let currentText = ''
 
       for (let i = 0; i < event.results.length; i++) {
         const result = event.results[i]
         const transcriptText = result[0].transcript
         
         if (result.isFinal) {
-          currentFinal += transcriptText + ' '
+          currentText += transcriptText + ' '
           console.log('Final:', transcriptText)
         } else {
-          currentInterim += transcriptText
+          currentText += transcriptText
           console.log('Interim:', transcriptText)
         }
       }
 
-      if (currentFinal) {
-        setTranscript(prev => prev + currentFinal)
-        setInterimTranscript('')
-      } else if (currentInterim) {
-        setInterimTranscript(currentInterim)
+      if (currentText) {
+        setTranscript(prev => prev + currentText)
+      }
+      
+      // On Android, restart automatically after getting results
+      if (isAndroid.current && isListening) {
+        if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
+        restartTimeoutRef.current = setTimeout(() => {
+          if (isListening && recognitionRef.current) {
+            try {
+              recognitionRef.current.start()
+              console.log('Restarted recognition on Android')
+            } catch (e) {
+              console.error('Failed to restart:', e)
+            }
+          }
+        }, 100)
       }
     }
 
@@ -152,21 +172,44 @@ function App() {
     // Handle end
     recognition.onend = () => {
       console.log('Recognition ended')
-      if (isListening) {
-        // Auto-restart if we were supposed to be listening
+      
+      // On Android, restart automatically if we're still supposed to be listening
+      if (isAndroid.current && isListening) {
         setRecognitionStatus('Restarting...')
         if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
         restartTimeoutRef.current = setTimeout(() => {
-          if (isListening) {
+          if (isListening && recognitionRef.current) {
             try {
-              recognition.start()
+              recognitionRef.current.start()
             } catch (e) {
               console.error('Failed to restart:', e)
               setIsListening(false)
               setRecognitionStatus('Stopped')
+              stopMicrophoneVisualization()
             }
           }
-        }, 100)
+        }, 200)
+      } else if (!isAndroid.current) {
+        // Original behavior for non-Android
+        if (isListening) {
+          setRecognitionStatus('Restarting...')
+          if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
+          restartTimeoutRef.current = setTimeout(() => {
+            if (isListening && recognitionRef.current) {
+              try {
+                recognitionRef.current.start()
+              } catch (e) {
+                console.error('Failed to restart:', e)
+                setIsListening(false)
+                setRecognitionStatus('Stopped')
+                stopMicrophoneVisualization()
+              }
+            }
+          }, 100)
+        } else {
+          setRecognitionStatus('Stopped')
+          stopMicrophoneVisualization()
+        }
       } else {
         setRecognitionStatus('Stopped')
         stopMicrophoneVisualization()
@@ -182,30 +225,46 @@ function App() {
         case 'no-speech':
           errorMessage = 'No speech detected. Please speak into the microphone.'
           setRecognitionStatus('No speech detected - try speaking louder')
+          // On Android, retry silently
+          if (isAndroid.current && isListening) {
+            setTimeout(() => {
+              if (isListening && recognitionRef.current) {
+                try {
+                  recognitionRef.current.start()
+                } catch (e) {}
+              }
+            }, 500)
+          }
           break
         case 'audio-capture':
           errorMessage = 'No microphone found. Please check your connection.'
           setRecognitionStatus('Microphone error')
+          setIsListening(false)
           break
         case 'not-allowed':
           errorMessage = 'Microphone access denied. Please allow access.'
           setRecognitionStatus('Permission denied')
+          setIsListening(false)
           break
         case 'network':
           errorMessage = 'Network error. Please check your connection.'
           setRecognitionStatus('Network error')
           break
         case 'aborted':
-          errorMessage = 'Recognition was aborted.'
-          setRecognitionStatus('Aborted')
+          if (!isAndroid.current) {
+            errorMessage = 'Recognition was aborted.'
+            setRecognitionStatus('Aborted')
+          }
           break
         case 'language-not-supported':
           errorMessage = `Language ${selectedLanguage} may not be fully supported.`
           setRecognitionStatus('Language not fully supported')
           break
         default:
-          errorMessage = `Error: ${event.error}`
-          setRecognitionStatus('Error occurred')
+          if (!isAndroid.current) {
+            errorMessage = `Error: ${event.error}`
+            setRecognitionStatus('Error occurred')
+          }
       }
       
       if (errorMessage) setError(errorMessage)
@@ -250,6 +309,9 @@ function App() {
       return
     }
 
+    // Initialize recognition
+    recognitionRef.current = initRecognition()
+
     // Cleanup on unmount
     return () => {
       if (recognitionRef.current) {
@@ -277,8 +339,6 @@ function App() {
       } else {
         recognitionRef.current = initRecognition()
       }
-    } else {
-      recognitionRef.current = initRecognition()
     }
   }, [selectedLanguage])
 
@@ -341,9 +401,6 @@ function App() {
     return 'var(--level-high)'
   }
 
-  // Display text (interim + final)
-  const displayText = transcript + (interimTranscript ? (transcript ? ' ' : '') + interimTranscript : '')
-
   return (
     <div className="container">
       <h1>🎙️ Voice Recognition App</h1>
@@ -371,6 +428,9 @@ function App() {
             </option>
           ))}
         </select>
+        {isAndroid.current && (
+          <span className="android-badge">📱 Android Mode Active</span>
+        )}
       </div>
 
       {/* Microphone Level Bar */}
@@ -437,24 +497,19 @@ function App() {
       <div className="transcript-container">
         <h3>Recognized Text:</h3>
         <div className="transcript-box">
-          {displayText || 'Click "Start Listening" and speak into your microphone...'}
+          {transcript || 'Click "Start Listening" and speak into your microphone...'}
         </div>
       </div>
 
       <div className="info">
-        <p>💡 Troubleshooting Tips:</p>
+        <p>💡 Android Tips:</p>
         <ul>
           <li><strong>Microphone level bar moves?</strong> ✓ Good - your mic is working!</li>
-          <li><strong>No text appearing?</strong> Try these fixes:</li>
-          <ul>
-            <li>Speak louder and more clearly</li>
-            <li>Check if your microphone isn't muted in Windows</li>
-            <li>Try a different language (some work better than others)</li>
-            <li>Close and reopen the browser tab</li>
-            <li>Try Chrome browser if using Edge</li>
-          </ul>
-          <li><strong>Test your microphone:</strong> <a href="https://webmictest.com/" target="_blank" rel="noopener noreferrer">webmictest.com</a></li>
-          <li>Works best in Chrome browser</li>
+          <li><strong>Speak continuously</strong> - The app will keep listening as long as you speak</li>
+          <li><strong>Short pause?</strong> - Recognition restarts automatically</li>
+          <li><strong>Check Chrome permissions:</strong> Settings → Apps → Chrome → Permissions → Microphone = Allow</li>
+          <li><strong>Try different languages</strong> - Some work better than others on Android</li>
+          <li><strong>Keep Chrome updated</strong> via Google Play Store</li>
         </ul>
       </div>
     </div>

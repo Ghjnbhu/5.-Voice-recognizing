@@ -491,4 +491,31 @@ h1 {
     text-decoration: underline;
   }
 
+    /* Android Badge */
+  .android-badge {
+    font-size: 0.75rem;
+    background: linear-gradient(135deg, #3ddb84 0%, #00a86b 100%);
+    color: white;
+    padding: 4px 10px;
+    border-radius: 20px;
+    margin-left: 8px;
+  }
+
+  /* Make buttons more touch-friendly on mobile */
+  @media (max-width: 768px) {
+    .btn {
+      padding: 14px 20px;
+      min-height: 48px;
+    }
+    
+    .language-dropdown {
+      min-height: 48px;
+    }
+    
+    .transcript-box {
+      font-size: 1rem;
+      min-height: 150px;
+    }
+  }
+
 }
