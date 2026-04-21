@@ -7,40 +7,31 @@ function App() {
   const [error, setError] = useState('')
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
   const [selectedLanguage, setSelectedLanguage] = useState('en-US')
-  const [interimTranscript, setInterimTranscript] = useState('')
   const [recognitionStatus, setRecognitionStatus] = useState('')
   const recognitionRef = useRef(null)
   const audioContextRef = useRef(null)
   const mediaStreamRef = useRef(null)
-  const sourceNodeRef = useRef(null)
   const analyserNodeRef = useRef(null)
   const animationFrameRef = useRef(null)
-  const restartTimeoutRef = useRef(null)
-  const isAndroid = useRef(/Android/i.test(navigator.userAgent))
+  const isAndroid = /Android/i.test(navigator.userAgent)
 
   // Language options
   const languages = [
     { code: 'en-US', name: 'English (US)' },
     { code: 'en-GB', name: 'English (UK)' },
-    { code: 'es-ES', name: 'Español (Spanish)' },
-    { code: 'fr-FR', name: 'Français (French)' },
-    { code: 'de-DE', name: 'Deutsch (German)' },
-    { code: 'it-IT', name: 'Italiano (Italian)' },
-    { code: 'pt-PT', name: 'Português (Portuguese)' },
-    { code: 'pt-BR', name: 'Português (Brazil)' },
-    { code: 'ru-RU', name: 'Русский (Russian)' },
-    { code: 'ja-JP', name: '日本語 (Japanese)' },
-    { code: 'ko-KR', name: '한국어 (Korean)' },
-    { code: 'zh-CN', name: '中文 (Chinese Simplified)' },
-    { code: 'zh-TW', name: '中文 (Chinese Traditional)' },
-    { code: 'ar-EG', name: 'العربية (Arabic)' },
-    { code: 'hi-IN', name: 'हिन्दी (Hindi)' },
-    { code: 'nl-NL', name: 'Nederlands (Dutch)' },
-    { code: 'pl-PL', name: 'Polski (Polish)' },
-    { code: 'tr-TR', name: 'Türkçe (Turkish)' },
+    { code: 'es-ES', name: 'Español' },
+    { code: 'fr-FR', name: 'Français' },
+    { code: 'de-DE', name: 'Deutsch' },
+    { code: 'it-IT', name: 'Italiano' },
+    { code: 'pt-BR', name: 'Português' },
+    { code: 'ru-RU', name: 'Русский' },
+    { code: 'ja-JP', name: '日本語' },
+    { code: 'ko-KR', name: '한국어' },
+    { code: 'zh-CN', name: '中文' },
+    { code: 'hi-IN', name: 'हिन्दी' },
   ]
 
-  // Update microphone level visualization
+  // Update microphone level
   const updateMicrophoneLevel = () => {
     if (!analyserNodeRef.current) return
     
@@ -59,7 +50,7 @@ function App() {
     animationFrameRef.current = requestAnimationFrame(updateMicrophoneLevel)
   }
 
-  // Start microphone for level visualization
+  // Start microphone visualization
   const startMicrophoneVisualization = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -69,8 +60,8 @@ function App() {
       analyserNodeRef.current = audioContextRef.current.createAnalyser()
       analyserNodeRef.current.fftSize = 256
       
-      sourceNodeRef.current = audioContextRef.current.createMediaStreamSource(stream)
-      sourceNodeRef.current.connect(analyserNodeRef.current)
+      const sourceNode = audioContextRef.current.createMediaStreamSource(stream)
+      sourceNode.connect(analyserNodeRef.current)
       
       if (audioContextRef.current.state === 'suspended') {
         await audioContextRef.current.resume()
@@ -78,19 +69,13 @@ function App() {
       
       updateMicrophoneLevel()
     } catch (err) {
-      console.error('Could not access microphone for visualization:', err)
+      console.error('Microphone visualization error:', err)
     }
   }
 
   const stopMicrophoneVisualization = () => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current)
-    }
-    if (sourceNodeRef.current) {
-      sourceNodeRef.current.disconnect()
-    }
-    if (analyserNodeRef.current) {
-      analyserNodeRef.current.disconnect()
     }
     if (audioContextRef.current) {
       audioContextRef.current.close()
@@ -105,240 +90,132 @@ function App() {
   const initRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SpeechRecognition) {
-      setError('Speech recognition not supported in this browser')
+      setError('Speech recognition not supported')
       return null
     }
 
     const recognition = new SpeechRecognition()
-    
-    // Android-specific settings
-    if (isAndroid.current) {
-      recognition.continuous = false  // Android works better with continuous=false
-      recognition.interimResults = true
-    } else {
-      recognition.continuous = true
-      recognition.interimResults = true
-    }
-    
+    // Critical: Use continuous=false for better Android compatibility
+    recognition.continuous = false
+    recognition.interimResults = true
     recognition.lang = selectedLanguage
     recognition.maxAlternatives = 1
 
-    // Handle results
-    recognition.onresult = (event) => {
-      console.log('Results received:', event.results)
-      let currentText = ''
-
-      for (let i = 0; i < event.results.length; i++) {
-        const result = event.results[i]
-        const transcriptText = result[0].transcript
-        
-        if (result.isFinal) {
-          currentText += transcriptText + ' '
-          console.log('Final:', transcriptText)
-        } else {
-          currentText += transcriptText
-          console.log('Interim:', transcriptText)
-        }
-      }
-
-      if (currentText) {
-        setTranscript(prev => prev + currentText)
-      }
-      
-      // On Android, restart automatically after getting results
-      if (isAndroid.current && isListening) {
-        if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
-        restartTimeoutRef.current = setTimeout(() => {
-          if (isListening && recognitionRef.current) {
-            try {
-              recognitionRef.current.start()
-              console.log('Restarted recognition on Android')
-            } catch (e) {
-              console.error('Failed to restart:', e)
-            }
-          }
-        }, 100)
-      }
-    }
-
-    // Handle start
     recognition.onstart = () => {
       console.log('Recognition started')
-      setRecognitionStatus('Listening for speech...')
+      setRecognitionStatus('Listening... Speak now')
       setError('')
       startMicrophoneVisualization()
     }
 
-    // Handle end
+    recognition.onresult = (event) => {
+      console.log('Result received:', event.results)
+      let finalText = ''
+      let interimText = ''
+
+      for (let i = 0; i < event.results.length; i++) {
+        const result = event.results[i]
+        const text = result[0].transcript
+        
+        if (result.isFinal) {
+          finalText += text + ' '
+          console.log('Final:', text)
+        } else {
+          interimText += text
+          console.log('Interim:', text)
+        }
+      }
+
+      if (finalText) {
+        setTranscript(prev => prev + finalText)
+      }
+      
+      // Update status with interim text for feedback
+      if (interimText) {
+        setRecognitionStatus(`Hearing: "${interimText}"`)
+      }
+    }
+
+    recognition.onerror = (event) => {
+      console.error('Recognition error:', event.error)
+      
+      switch (event.error) {
+        case 'no-speech':
+          setError('No speech detected. Please speak louder and try again.')
+          setRecognitionStatus('No speech detected')
+          break
+        case 'audio-capture':
+          setError('No microphone found.')
+          setRecognitionStatus('Microphone error')
+          break
+        case 'not-allowed':
+          setError('Microphone access denied. Check Chrome permissions.')
+          setRecognitionStatus('Permission denied')
+          break
+        default:
+          if (event.error !== 'aborted') {
+            setError(`Error: ${event.error}`)
+          }
+      }
+      
+      setIsListening(false)
+      stopMicrophoneVisualization()
+    }
+
     recognition.onend = () => {
       console.log('Recognition ended')
-      
-      // On Android, restart automatically if we're still supposed to be listening
-      if (isAndroid.current && isListening) {
-        setRecognitionStatus('Restarting...')
-        if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
-        restartTimeoutRef.current = setTimeout(() => {
-          if (isListening && recognitionRef.current) {
-            try {
-              recognitionRef.current.start()
-            } catch (e) {
-              console.error('Failed to restart:', e)
-              setIsListening(false)
-              setRecognitionStatus('Stopped')
-              stopMicrophoneVisualization()
-            }
-          }
-        }, 200)
-      } else if (!isAndroid.current) {
-        // Original behavior for non-Android
-        if (isListening) {
-          setRecognitionStatus('Restarting...')
-          if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
-          restartTimeoutRef.current = setTimeout(() => {
-            if (isListening && recognitionRef.current) {
-              try {
-                recognitionRef.current.start()
-              } catch (e) {
-                console.error('Failed to restart:', e)
-                setIsListening(false)
-                setRecognitionStatus('Stopped')
-                stopMicrophoneVisualization()
-              }
-            }
-          }, 100)
-        } else {
-          setRecognitionStatus('Stopped')
-          stopMicrophoneVisualization()
-        }
+      if (isListening) {
+        // Only update status, don't auto-restart
+        setRecognitionStatus('Stopped - click Start again')
+        setIsListening(false)
+        stopMicrophoneVisualization()
       } else {
-        setRecognitionStatus('Stopped')
+        setRecognitionStatus('Ready')
         stopMicrophoneVisualization()
       }
     }
 
-    // Handle errors
-    recognition.onerror = (event) => {
-      console.error('Recognition error:', event.error)
-      let errorMessage = ''
-      
-      switch (event.error) {
-        case 'no-speech':
-          errorMessage = 'No speech detected. Please speak into the microphone.'
-          setRecognitionStatus('No speech detected - try speaking louder')
-          // On Android, retry silently
-          if (isAndroid.current && isListening) {
-            setTimeout(() => {
-              if (isListening && recognitionRef.current) {
-                try {
-                  recognitionRef.current.start()
-                } catch (e) {}
-              }
-            }, 500)
-          }
-          break
-        case 'audio-capture':
-          errorMessage = 'No microphone found. Please check your connection.'
-          setRecognitionStatus('Microphone error')
-          setIsListening(false)
-          break
-        case 'not-allowed':
-          errorMessage = 'Microphone access denied. Please allow access.'
-          setRecognitionStatus('Permission denied')
-          setIsListening(false)
-          break
-        case 'network':
-          errorMessage = 'Network error. Please check your connection.'
-          setRecognitionStatus('Network error')
-          break
-        case 'aborted':
-          if (!isAndroid.current) {
-            errorMessage = 'Recognition was aborted.'
-            setRecognitionStatus('Aborted')
-          }
-          break
-        case 'language-not-supported':
-          errorMessage = `Language ${selectedLanguage} may not be fully supported.`
-          setRecognitionStatus('Language not fully supported')
-          break
-        default:
-          if (!isAndroid.current) {
-            errorMessage = `Error: ${event.error}`
-            setRecognitionStatus('Error occurred')
-          }
-      }
-      
-      if (errorMessage) setError(errorMessage)
-    }
-
-    // Handle sound start
     recognition.onsoundstart = () => {
       console.log('Sound detected')
-      setRecognitionStatus('Sound detected - processing speech...')
+      setRecognitionStatus('Sound detected! Transcribing...')
     }
 
-    // Handle sound end
-    recognition.onsoundend = () => {
-      console.log('Sound ended')
-      setRecognitionStatus('Waiting for speech...')
-    }
-
-    // Handle speech start
-    recognition.onspeechstart = () => {
-      console.log('Speech started')
-      setRecognitionStatus('Speech detected - transcribing...')
-    }
-
-    // Handle speech end
     recognition.onspeechend = () => {
       console.log('Speech ended')
-      setRecognitionStatus('Processing...')
+      setRecognitionStatus('Processing speech...')
     }
 
     return recognition
   }
 
   useEffect(() => {
-    // Check browser support
+    // Check support
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      setError('Your browser does not support speech recognition. Please use Chrome, Edge, or Safari.')
+      setError('Speech recognition not supported in this browser')
       return
     }
 
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setError('Your browser does not support microphone access.')
-      return
-    }
-
-    // Initialize recognition
+    // Initialize
     recognitionRef.current = initRecognition()
 
-    // Cleanup on unmount
     return () => {
       if (recognitionRef.current) {
         try {
-          recognitionRef.current.stop()
+          recognitionRef.current.abort()
         } catch (e) {}
-      }
-      if (restartTimeoutRef.current) {
-        clearTimeout(restartTimeoutRef.current)
       }
       stopMicrophoneVisualization()
     }
   }, [])
 
-  // Re-initialize when language changes
+  // Re-init when language changes
   useEffect(() => {
     if (recognitionRef.current) {
-      const wasListening = isListening
-      if (wasListening) {
-        stopListening()
-        setTimeout(() => {
-          recognitionRef.current = initRecognition()
-          if (wasListening) startListening()
-        }, 200)
-      } else {
-        recognitionRef.current = initRecognition()
-      }
+      const oldRecognition = recognitionRef.current
+      recognitionRef.current = initRecognition()
+      try {
+        oldRecognition.abort()
+      } catch (e) {}
     }
   }, [selectedLanguage])
 
@@ -348,20 +225,22 @@ function App() {
     }
 
     setError('')
-    setTranscript('')
-    setInterimTranscript('')
-    setIsListening(true)
+    setRecognitionStatus('Requesting microphone...')
     
     try {
-      // Request microphone permission first
-      await navigator.mediaDevices.getUserMedia({ audio: true })
+      // First, get microphone permission
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      stream.getTracks().forEach(track => track.stop()) // Release immediately
+      
+      // Start recognition
       recognitionRef.current.start()
+      setIsListening(true)
     } catch (err) {
-      console.error('Microphone permission error:', err)
+      console.error('Permission error:', err)
       if (err.name === 'NotAllowedError') {
-        setError('Microphone access denied. Please click the microphone icon in your browser address bar and allow access.')
+        setError('Microphone access denied. Please:\n1. Tap the 🔒 icon in address bar\n2. Allow microphone access\n3. Refresh and try again')
       } else if (err.name === 'NotFoundError') {
-        setError('No microphone found. Please connect a microphone to your computer.')
+        setError('No microphone found on this device')
       } else {
         setError(`Cannot access microphone: ${err.message}`)
       }
@@ -370,28 +249,20 @@ function App() {
   }
 
   const stopListening = () => {
-    setIsListening(false)
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current)
-    }
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop()
       } catch (e) {
-        console.error('Error stopping recognition:', e)
+        console.error('Stop error:', e)
       }
     }
+    setIsListening(false)
     stopMicrophoneVisualization()
     setRecognitionStatus('Stopped')
   }
 
   const clearText = () => {
     setTranscript('')
-    setInterimTranscript('')
-  }
-
-  const handleLanguageChange = (event) => {
-    setSelectedLanguage(event.target.value)
   }
 
   const getLevelColor = () => {
@@ -403,8 +274,8 @@ function App() {
 
   return (
     <div className="container">
-      <h1>🎙️ Voice Recognition App</h1>
-      <p className="subtitle">Speak into your microphone and see the text appear</p>
+      <h1>🎙️ Voice Recognition</h1>
+      <p className="subtitle">Press Start, speak, then press Start again for more</p>
 
       {error && (
         <div className="error-message">
@@ -412,13 +283,12 @@ function App() {
         </div>
       )}
 
-      {/* Language Selection Dropdown */}
+      {/* Language Selection */}
       <div className="language-selector">
-        <label htmlFor="language">🌍 Recognition Language:</label>
+        <label>🌍 Language:</label>
         <select
-          id="language"
           value={selectedLanguage}
-          onChange={handleLanguageChange}
+          onChange={(e) => setSelectedLanguage(e.target.value)}
           disabled={isListening}
           className="language-dropdown"
         >
@@ -428,37 +298,32 @@ function App() {
             </option>
           ))}
         </select>
-        {isAndroid.current && (
-          <span className="android-badge">📱 Android Mode Active</span>
-        )}
       </div>
 
-      {/* Microphone Level Bar */}
-      <div className={`microphone-level-container ${isListening ? 'active' : 'inactive'}`}>
+      {/* Microphone Level */}
+      <div className="microphone-level-container">
         <div className="level-label">
           <span>🎤 Microphone Level</span>
-          <span className="level-percentage">
-            {isListening ? `${microphoneLevel}%` : '—%'}
-          </span>
+          <span>{isListening ? `${microphoneLevel}%` : '—%'}</span>
         </div>
         <div className="level-bar-bg">
           <div 
             className="level-bar-fill"
             style={{ 
               width: isListening ? `${microphoneLevel}%` : '0%',
-              backgroundColor: getLevelColor(),
-              transition: 'width 0.05s linear'
+              backgroundColor: getLevelColor()
             }}
           />
         </div>
-        {isListening && (
+        {isListening && recognitionStatus && (
           <div className="recognition-status">
             <span className="status-dot"></span>
-            {recognitionStatus || 'Listening...'}
+            {recognitionStatus}
           </div>
         )}
       </div>
 
+      {/* Buttons */}
       <div className="button-group">
         <button 
           onClick={startListening} 
@@ -473,44 +338,43 @@ function App() {
           disabled={!isListening}
           className="btn btn-stop"
         >
-          ⏹️ Stop Listening
+          ⏹️ Stop
         </button>
         
         <button 
           onClick={clearText}
           className="btn btn-clear"
         >
-          🗑️ Clear Text
+          🗑️ Clear
         </button>
       </div>
 
       <div className="status">
-        <span className="status-icon">{isListening ? '🔴' : '⚪'}</span>
-        Status: {isListening ? 'Listening...' : 'Idle'}
-        {selectedLanguage && (
-          <span className="language-badge">
-            🗣️ {languages.find(l => l.code === selectedLanguage)?.name || selectedLanguage}
-          </span>
-        )}
+        Status: {isListening ? '🔴 Listening' : '⚪ Idle'}
+        <span className="language-badge">
+          {languages.find(l => l.code === selectedLanguage)?.name || selectedLanguage}
+        </span>
       </div>
 
+      {/* Transcript */}
       <div className="transcript-container">
         <h3>Recognized Text:</h3>
         <div className="transcript-box">
-          {transcript || 'Click "Start Listening" and speak into your microphone...'}
+          {transcript || 'Press "Start Listening" and speak...'}
         </div>
       </div>
 
-      <div className="info">
-        <p>💡 Android Tips:</p>
-        <ul>
-          <li><strong>Microphone level bar moves?</strong> ✓ Good - your mic is working!</li>
-          <li><strong>Speak continuously</strong> - The app will keep listening as long as you speak</li>
-          <li><strong>Short pause?</strong> - Recognition restarts automatically</li>
-          <li><strong>Check Chrome permissions:</strong> Settings → Apps → Chrome → Permissions → Microphone = Allow</li>
-          <li><strong>Try different languages</strong> - Some work better than others on Android</li>
-          <li><strong>Keep Chrome updated</strong> via Google Play Store</li>
-        </ul>
+      {/* Android Instructions */}
+      <div className="info android-info">
+        <p>📱 Android Instructions:</p>
+        <ol>
+          <li><strong>Tap Start Listening</strong> - Grant microphone permission when asked</li>
+          <li><strong>Speak clearly</strong> - The app listens for one phrase at a time</li>
+          <li><strong>After speaking</strong> - Recognition stops automatically (this is normal!)</li>
+          <li><strong>For more speech</strong> - Tap Start Listening again</li>
+          <li><strong>Check permission</strong> - Tap 🔒 in address bar → Microphone → Allow</li>
+        </ol>
+        <p className="note">Note: Chrome on Android stops listening after each phrase. Just press Start again to continue.</p>
       </div>
     </div>
   )
