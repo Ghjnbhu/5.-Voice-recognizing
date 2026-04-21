@@ -18,6 +18,7 @@ function App() {
 
   const languages = [
     { code: 'en-US', name: 'English (US)' },
+    { code: 'en-GB', name: 'English (UK)' },
     { code: 'es-ES', name: 'Español' },
     { code: 'fr-FR', name: 'Français' },
     { code: 'de-DE', name: 'Deutsch' },
@@ -79,7 +80,7 @@ function App() {
     setMicrophoneLevel(0)
   }, [])
 
-  // WORKAROUND: Manual restart in onend (fixes Android bug)
+  // IMPROVED: Recognition with proper Android fixes
   const initRecognition = useCallback(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -87,6 +88,7 @@ function App() {
       return null;
     }
 
+    addDiagnosticLog('INFO', 'Initializing engine...', `Language: ${selectedLanguage}`);
     const recognition = new SpeechRecognition();
     recognition.continuous = false; // Required for stability on Android
     recognition.interimResults = true;
@@ -94,10 +96,12 @@ function App() {
 
     recognition.onstart = () => {
       addDiagnosticLog('SUCCESS', '🎤 Engine Started');
+      startMicrophoneVisualization();
     };
 
     recognition.onresult = (event) => {
       let finalText = '';
+      // IMPROVED: Using event.resultIndex for reliability
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         if (event.results[i].isFinal) {
           finalText += event.results[i][0].transcript + ' ';
@@ -105,124 +109,145 @@ function App() {
       }
       if (finalText) {
         setTranscript(prev => prev + finalText);
-        addDiagnosticLog('SUCCESS', '📝 Captured phrase');
+        addDiagnosticLog('SUCCESS', '📝 Captured phrase', finalText.trim());
       }
     };
 
     recognition.onend = () => {
-      // Only restart if the user wants to listen AND the app is visible
+      // IMPROVED: Only restart if user wants to listen AND app is visible
       if (isListening && document.visibilityState === 'visible') {
         addDiagnosticLog('INFO', '🔄 Auto-restarting...');
         
-        // Increased buffer time (350ms) to ensure mic hardware releases
+        // IMPROVED: Increased buffer time (350ms) for mic hardware release
         if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
         restartTimeoutRef.current = setTimeout(() => {
-          try {
-            recognition.start();
-          } catch (err) {
-            addDiagnosticLog('ERROR', 'Restart failed', err.message);
+          if (isListening && recognitionRef.current) {
+            try {
+              recognitionRef.current.start();
+            } catch (err) {
+              addDiagnosticLog('ERROR', 'Restart failed', err.message);
+            }
           }
         }, 350);
+      } else if (!isListening) {
+        addDiagnosticLog('INFO', 'Stopped by user');
+        stopMicrophoneVisualization();
       } else {
-        addDiagnosticLog('INFO', 'Stopped (Inactive state)');
+        addDiagnosticLog('INFO', 'Stopped (App in background)');
       }
     };
 
     recognition.onerror = (event) => {
       if (event.error === 'no-speech') {
         addDiagnosticLog('INFO', 'No speech, staying active...');
+      } else if (event.error === 'not-allowed') {
+        setError('Microphone access denied. Tap 🔒 → Allow microphone');
+        setIsListening(false);
+        stopMicrophoneVisualization();
+      } else if (event.error === 'audio-capture') {
+        setError('No microphone found');
+        setIsListening(false);
       } else {
         addDiagnosticLog('WARNING', `Error: ${event.error}`);
       }
     };
 
+    recognition.onsoundstart = () => {
+      addDiagnosticLog('SUCCESS', '🔊 Sound detected!');
+    };
+
+    recognition.onspeechend = () => {
+      addDiagnosticLog('INFO', 'Speech ended, processing...');
+    };
+
     return recognition;
-  }, [selectedLanguage, isListening]);
+  }, [selectedLanguage, isListening, startMicrophoneVisualization, stopMicrophoneVisualization]);
 
   useEffect(() => {
-    recognitionRef.current = initRecognition()
-    addDiagnosticLog('INFO', 'App ready', 'Manual restart workaround active')
+    recognitionRef.current = initRecognition();
+    addDiagnosticLog('INFO', 'App ready', 'Improved Android workaround active');
     return () => {
-      if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
-      if (recognitionRef.current) recognitionRef.current.abort()
-      stopMicrophoneVisualization()
-    }
-  }, [initRecognition, stopMicrophoneVisualization])
+      if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+      if (recognitionRef.current) recognitionRef.current.abort();
+      stopMicrophoneVisualization();
+    };
+  }, [initRecognition, stopMicrophoneVisualization]);
 
+  // Reinitialize when language changes
   useEffect(() => {
     if (recognitionRef.current) {
-      const wasListening = isListening
+      const wasListening = isListening;
       if (wasListening) {
-        try { recognitionRef.current.stop() } catch(e) {}
+        try { recognitionRef.current.stop(); } catch(e) {}
         setTimeout(() => {
-          recognitionRef.current = initRecognition()
+          recognitionRef.current = initRecognition();
           if (wasListening) {
-            try { recognitionRef.current.start() } catch(e) {}
+            try { recognitionRef.current.start(); } catch(e) {}
           }
-        }, 200)
+        }, 400);
       } else {
-        recognitionRef.current = initRecognition()
+        recognitionRef.current = initRecognition();
       }
     }
-  }, [selectedLanguage, initRecognition, isListening])
+  }, [selectedLanguage, initRecognition, isListening]);
 
   const startListening = async () => {
-    setError('')
-    addDiagnosticLog('INFO', '▶️ Start button pressed', 'Manual restart mode')
+    setError('');
+    addDiagnosticLog('INFO', '▶️ Start button pressed');
     
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      stream.getTracks().forEach(track => track.stop())
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop());
       
-      setIsListening(true)
-      recognitionRef.current.start()
-      addDiagnosticLog('SUCCESS', 'Listening active', 'Manual restart keeps it alive')
+      setIsListening(true);
+      recognitionRef.current.start();
+      addDiagnosticLog('SUCCESS', 'Listening active', '350ms restart delay active');
     } catch (err) {
-      addDiagnosticLog('ERROR', 'Permission failed', err.message)
-      setError(`Error: ${err.message}. Tap 🔒 and allow microphone.`)
+      addDiagnosticLog('ERROR', 'Permission failed', err.message);
+      setError(`Error: ${err.message}. Tap 🔒 and allow microphone.`);
     }
-  }
+  };
 
   const stopListening = () => {
-    addDiagnosticLog('INFO', '⏹️ Stopped by user', '')
-    setIsListening(false)
+    addDiagnosticLog('INFO', '⏹️ Stopped by user');
+    setIsListening(false);
     
-    if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
+    if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop() } catch(e) {}
+      try { recognitionRef.current.stop(); } catch(e) {}
     }
-  }
+  };
 
   const clearText = () => {
-    setTranscript('')
-    addDiagnosticLog('INFO', 'Text cleared', '')
-  }
+    setTranscript('');
+    addDiagnosticLog('INFO', 'Text cleared');
+  };
 
   const clearLogs = () => {
-    setDiagnosticLogs([])
-    addDiagnosticLog('INFO', 'Logs cleared', '')
-  }
+    setDiagnosticLogs([]);
+    addDiagnosticLog('INFO', 'Logs cleared');
+  };
 
   const getLevelColor = () => {
-    if (microphoneLevel < 20) return '#4caf50'
-    if (microphoneLevel < 50) return '#8bc34a'
-    if (microphoneLevel < 80) return '#ff9800'
-    return '#f44336'
-  }
+    if (microphoneLevel < 20) return '#4caf50';
+    if (microphoneLevel < 50) return '#8bc34a';
+    if (microphoneLevel < 80) return '#ff9800';
+    return '#f44336';
+  };
 
   const getLogIcon = (type) => {
     switch(type) {
-      case 'SUCCESS': return '✅'
-      case 'ERROR': return '❌'
-      case 'WARNING': return '⚠️'
-      default: return '🔄'
+      case 'SUCCESS': return '✅';
+      case 'ERROR': return '❌';
+      case 'WARNING': return '⚠️';
+      default: return '🔄';
     }
-  }
+  };
 
   return (
     <div className="container">
       <h1>🎙️ Voice Recognition</h1>
-      <p className="subtitle">Android Workaround Mode - Manual Restart Keeps It Alive</p>
+      <p className="subtitle">Improved Android Workaround - 350ms Restart Delay</p>
 
       {error && <div className="error-message">⚠️ {error}</div>}
 
@@ -242,7 +267,7 @@ function App() {
           <div className="level-bar-fill" style={{ width: isListening ? `${microphoneLevel}%` : '0%', backgroundColor: getLevelColor() }} />
         </div>
         {isListening && microphoneLevel < 10 && (
-          <div className="level-hint">🔴 No sound detected - speak louder</div>
+          <div className="level-hint">🔴 No sound - speak louder or check mic</div>
         )}
         {isListening && microphoneLevel > 50 && (
           <div className="level-hint success">🟢 Voice detected! Speaking...</div>
@@ -251,12 +276,12 @@ function App() {
 
       <div className="visual-console">
         <div className="console-header">
-          <strong>📱 Live Console (Manual Restart Mode)</strong>
+          <strong>📱 Live Console (350ms Restart Delay)</strong>
           <button onClick={clearLogs} className="console-clear">Clear</button>
         </div>
         <div className="console-logs">
           {diagnosticLogs.length === 0 ? (
-            <div className="console-empty">Tap "Start Listening" - manual restart keeps it alive!</div>
+            <div className="console-empty">Tap "Start Listening" - 350ms delay prevents mic conflicts</div>
           ) : (
             diagnosticLogs.map((log, idx) => (
               <div key={idx} className={`console-log console-${log.type.toLowerCase()}`}>
@@ -278,7 +303,7 @@ function App() {
 
       <div className="status">
         <span className="status-icon">{isListening ? '🔴' : '⚪'}</span>
-        Status: {isListening ? '🔄 Listening (manual restart mode)' : 'Idle'}
+        Status: {isListening ? '🔄 Active (350ms restart)' : 'Idle'}
         <span className="language-badge">{languages.find(l => l.code === selectedLanguage)?.name || selectedLanguage}</span>
       </div>
 
@@ -288,16 +313,15 @@ function App() {
       </div>
 
       <div className="info">
-        <p>🔧 <strong>Why This Happens:</strong></p>
-        <p>Chrome on Android has a known bug where <code>onresult</code> events don't fire properly with continuous recognition [citation:9]. This has been an open issue since 2013.</p>
-        <p><strong>The Workaround:</strong> Manual restart in <code>onend</code> - recognition restarts after each phrase.</p>
-        <ol>
-          <li><strong>Press Start once</strong> - Recognition activates</li>
-          <li><strong>Speak a phrase</strong> - Your words should appear</li>
-          <li><strong>After a pause</strong> - Recognition restarts automatically</li>
-          <li><strong>Watch the console</strong> - See "🔄 Manual restart..." messages</li>
-        </ol>
-        <p className="note">💡 If text still doesn't appear, try Chrome Beta or Canary - they sometimes fix this issue.</p>
+        <p>🔧 <strong>Android Workaround Improvements:</strong></p>
+        <ul>
+          <li>✅ <code>continuous: false</code> - Prevents Chrome's broken continuous mode</li>
+          <li>✅ <code>event.resultIndex</code> - More reliable result extraction</li>
+          <li>✅ <strong>350ms restart delay</strong> - Allows mic hardware to fully release</li>
+          <li>✅ <code>document.visibilityState</code> - No restart when app is backgrounded</li>
+          <li>✅ 'no-speech' handled gracefully - Doesn't break the flow</li>
+        </ul>
+        <p className="note">💡 The 350ms delay is critical - Chrome needs time to release the mic hardware before restarting!</p>
       </div>
     </div>
   )
