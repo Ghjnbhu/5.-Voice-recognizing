@@ -80,64 +80,64 @@ function App() {
   }, [])
 
   // WORKAROUND: Manual restart in onend (fixes Android bug)
-const initRecognition = useCallback(() => {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    addDiagnosticLog('ERROR', 'Speech recognition not supported');
-    return null;
-  }
-
-  const recognition = new SpeechRecognition();
-  recognition.continuous = false; // Required for stability on Android
-  recognition.interimResults = true;
-  recognition.lang = selectedLanguage;
-
-  recognition.onstart = () => {
-    addDiagnosticLog('SUCCESS', '🎤 Engine Started');
-  };
-
-  recognition.onresult = (event) => {
-    let finalText = '';
-    for (let i = event.resultIndex; i < event.results.length; ++i) {
-      if (event.results[i].isFinal) {
-        finalText += event.results[i][0].transcript + ' ';
-      }
+  const initRecognition = useCallback(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      addDiagnosticLog('ERROR', 'Speech recognition not supported');
+      return null;
     }
-    if (finalText) {
-      setTranscript(prev => prev + finalText);
-      addDiagnosticLog('SUCCESS', '📝 Captured phrase');
-    }
-  };
 
-  recognition.onend = () => {
-    // Only restart if the user wants to listen AND the app is visible
-    if (isListening && document.visibilityState === 'visible') {
-      addDiagnosticLog('INFO', '🔄 Auto-restarting...');
-      
-      // Increased buffer time (350ms) to ensure mic hardware releases
-      if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
-      restartTimeoutRef.current = setTimeout(() => {
-        try {
-          recognition.start();
-        } catch (err) {
-          addDiagnosticLog('ERROR', 'Restart failed', err.message);
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false; // Required for stability on Android
+    recognition.interimResults = true;
+    recognition.lang = selectedLanguage;
+
+    recognition.onstart = () => {
+      addDiagnosticLog('SUCCESS', '🎤 Engine Started');
+    };
+
+    recognition.onresult = (event) => {
+      let finalText = '';
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalText += event.results[i][0].transcript + ' ';
         }
-      }, 350);
-    } else {
-      addDiagnosticLog('INFO', 'Stopped (Inactive state)');
-    }
-  };
+      }
+      if (finalText) {
+        setTranscript(prev => prev + finalText);
+        addDiagnosticLog('SUCCESS', '📝 Captured phrase');
+      }
+    };
 
-  recognition.onerror = (event) => {
-    if (event.error === 'no-speech') {
-      addDiagnosticLog('INFO', 'No speech, staying active...');
-    } else {
-      addDiagnosticLog('WARNING', `Error: ${event.error}`);
-    }
-  };
+    recognition.onend = () => {
+      // Only restart if the user wants to listen AND the app is visible
+      if (isListening && document.visibilityState === 'visible') {
+        addDiagnosticLog('INFO', '🔄 Auto-restarting...');
+        
+        // Increased buffer time (350ms) to ensure mic hardware releases
+        if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+        restartTimeoutRef.current = setTimeout(() => {
+          try {
+            recognition.start();
+          } catch (err) {
+            addDiagnosticLog('ERROR', 'Restart failed', err.message);
+          }
+        }, 350);
+      } else {
+        addDiagnosticLog('INFO', 'Stopped (Inactive state)');
+      }
+    };
 
-  return recognition;
-}, [selectedLanguage, isListening]);
+    recognition.onerror = (event) => {
+      if (event.error === 'no-speech') {
+        addDiagnosticLog('INFO', 'No speech, staying active...');
+      } else {
+        addDiagnosticLog('WARNING', `Error: ${event.error}`);
+      }
+    };
+
+    return recognition;
+  }, [selectedLanguage, isListening]);
 
   useEffect(() => {
     recognitionRef.current = initRecognition()
@@ -191,6 +191,9 @@ const initRecognition = useCallback(() => {
     if (recognitionRef.current) {
       try { recognitionRef.current.stop() } catch(e) {}
     }
+    
+    // ✅ THE ONLY FIX: stop microphone visualization
+    stopMicrophoneVisualization()
   }
 
   const clearText = () => {
