@@ -67,17 +67,32 @@ function App() {
         await audioContextRef.current.resume()
       }
       updateMicrophoneLevel()
+      addDiagnosticLog('SUCCESS', 'Microphone visualization started', '')
     } catch (err) {
       console.error('Visualization error:', err)
+      addDiagnosticLog('WARNING', 'Microphone visualization failed', err.message)
     }
-  }, [updateMicrophoneLevel])
+  }, [updateMicrophoneLevel, addDiagnosticLog])
 
   const stopMicrophoneVisualization = useCallback(() => {
-    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
-    if (audioContextRef.current) audioContextRef.current.close()
-    if (mediaStreamRef.current) mediaStreamRef.current.getTracks().forEach(track => track.stop())
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current)
+      animationFrameRef.current = null
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close()
+      audioContextRef.current = null
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop())
+      mediaStreamRef.current = null
+    }
+    if (analyserNodeRef.current) {
+      analyserNodeRef.current = null
+    }
     setMicrophoneLevel(0)
-  }, [])
+    addDiagnosticLog('INFO', 'Microphone visualization stopped', 'Resources released')
+  }, [addDiagnosticLog])
 
   // WORKAROUND: Manual restart in onend (fixes Android bug)
   const initRecognition = useCallback(() => {
@@ -137,7 +152,7 @@ function App() {
     };
 
     return recognition;
-  }, [selectedLanguage, isListening]);
+  }, [selectedLanguage, isListening, addDiagnosticLog]);
 
   useEffect(() => {
     recognitionRef.current = initRecognition()
@@ -147,7 +162,7 @@ function App() {
       if (recognitionRef.current) recognitionRef.current.abort()
       stopMicrophoneVisualization()
     }
-  }, [initRecognition, stopMicrophoneVisualization])
+  }, [initRecognition, stopMicrophoneVisualization, addDiagnosticLog])
 
   useEffect(() => {
     if (recognitionRef.current) {
@@ -171,8 +186,11 @@ function App() {
     addDiagnosticLog('INFO', '▶️ Start button pressed', 'Manual restart mode')
     
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      stream.getTracks().forEach(track => track.stop())
+      // Request microphone permission and start visualization first
+      await startMicrophoneVisualization()
+      
+      // Small delay to ensure audio context is ready
+      await new Promise(resolve => setTimeout(resolve, 100))
       
       setIsListening(true)
       recognitionRef.current.start()
@@ -180,6 +198,8 @@ function App() {
     } catch (err) {
       addDiagnosticLog('ERROR', 'Permission failed', err.message)
       setError(`Error: ${err.message}. Tap 🔒 and allow microphone.`)
+      // Clean up if start failed
+      stopMicrophoneVisualization()
     }
   }
 
@@ -187,10 +207,21 @@ function App() {
     addDiagnosticLog('INFO', '⏹️ Stopped by user', '')
     setIsListening(false)
     
-    if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop() } catch(e) {}
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current)
+      restartTimeoutRef.current = null
     }
+    
+    if (recognitionRef.current) {
+      try { 
+        recognitionRef.current.stop() 
+      } catch(e) {
+        addDiagnosticLog('WARNING', 'Error stopping recognition', e.message)
+      }
+    }
+    
+    // FIXED: Properly release microphone resources
+    stopMicrophoneVisualization()
   }
 
   const clearText = () => {
@@ -217,6 +248,21 @@ function App() {
       case 'WARNING': return '⚠️'
       default: return '🔄'
     }
+  }
+
+  // Check browser support on mount
+  const isSpeechRecognitionSupported = typeof window !== 'undefined' && 
+    (window.SpeechRecognition || window.webkitSpeechRecognition)
+
+  if (!isSpeechRecognitionSupported) {
+    return (
+      <div className="container">
+        <h1>🎙️ Voice Recognition</h1>
+        <div className="error-message">
+          ❌ Browser not supported. Please use Chrome, Edge, Safari, or another browser that supports Web Speech API.
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -289,7 +335,7 @@ function App() {
 
       <div className="info">
         <p>🔧 <strong>Why This Happens:</strong></p>
-        <p>Chrome on Android has a known bug where <code>onresult</code> events don't fire properly with continuous recognition [citation:9]. This has been an open issue since 2013.</p>
+        <p>Chrome on Android has a known bug where <code>onresult</code> events don't fire properly with continuous recognition. This has been an open issue since 2013.</p>
         <p><strong>The Workaround:</strong> Manual restart in <code>onend</code> - recognition restarts after each phrase.</p>
         <ol>
           <li><strong>Press Start once</strong> - Recognition activates</li>

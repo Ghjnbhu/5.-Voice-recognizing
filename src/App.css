@@ -408,4 +408,21 @@ h1 {
   .console-logs {
     max-height: 200px;
   }
+
+    .btn:focus-visible {
+    outline: 3px solid #667eea;
+    outline-offset: 2px;
+  }
+
+  /* Improve touch targets on mobile */
+  @media (max-width: 768px) {
+    .btn {
+      min-height: 44px; /* Better touch target */
+    }
+    .console-log {
+      padding: 12px; /* Easier to tap for debugging */
+    }
+  }
+
+
 }
