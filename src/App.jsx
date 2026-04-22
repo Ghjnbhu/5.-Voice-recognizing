@@ -15,6 +15,8 @@ function App() {
   const analyserNodeRef = useRef(null)
   const animationFrameRef = useRef(null)
   const restartTimeoutRef = useRef(null)
+  // ✅ 1. Add a ref to always hold the current listening state
+  const isListeningRef = useRef(false)
 
   const languages = [
     { code: 'en-US', name: 'English (US)' },
@@ -110,8 +112,8 @@ function App() {
     };
 
     recognition.onend = () => {
-      // Only restart if the user wants to listen AND the app is visible
-      if (isListening && document.visibilityState === 'visible') {
+      // ✅ 2. Use the ref instead of the stale closure variable
+      if (isListeningRef.current && document.visibilityState === 'visible') {
         addDiagnosticLog('INFO', '🔄 Auto-restarting...');
         
         // Increased buffer time (350ms) to ensure mic hardware releases
@@ -137,7 +139,8 @@ function App() {
     };
 
     return recognition;
-  }, [selectedLanguage, isListening]);
+  // ✅ 3. Remove isListening from dependencies – we use the ref now
+  }, [selectedLanguage]);
 
   useEffect(() => {
     recognitionRef.current = initRecognition()
@@ -175,6 +178,7 @@ function App() {
       stream.getTracks().forEach(track => track.stop())
       
       setIsListening(true)
+      isListeningRef.current = true   // ✅ 4. Update ref synchronously
       recognitionRef.current.start()
       addDiagnosticLog('SUCCESS', 'Listening active', 'Manual restart keeps it alive')
     } catch (err) {
@@ -186,13 +190,14 @@ function App() {
   const stopListening = () => {
     addDiagnosticLog('INFO', '⏹️ Stopped by user', '')
     setIsListening(false)
+    isListeningRef.current = false   // ✅ 5. Update ref synchronously
     
     if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
     if (recognitionRef.current) {
       try { recognitionRef.current.stop() } catch(e) {}
     }
     
-    // ✅ THE ONLY FIX: stop microphone visualization
+    // ✅ THE ONLY FIX: stop microphone visualization (already present)
     stopMicrophoneVisualization()
   }
 
@@ -200,8 +205,6 @@ function App() {
     setTranscript('')
     addDiagnosticLog('INFO', 'Text cleared', '')
   }
-
-  
 
   const clearLogs = () => {
     setDiagnosticLogs([])
