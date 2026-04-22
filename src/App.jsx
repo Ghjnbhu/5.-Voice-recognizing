@@ -15,8 +15,6 @@ function App() {
   const analyserNodeRef = useRef(null)
   const animationFrameRef = useRef(null)
   const restartTimeoutRef = useRef(null)
-  // ✅ REF to always hold the current listening state (synchronous)
-  const isListeningRef = useRef(false)
 
   const languages = [
     { code: 'en-US', name: 'English (US)' },
@@ -112,10 +110,11 @@ function App() {
     };
 
     recognition.onend = () => {
-      // ✅ Use the REF instead of the stale closure variable
-      if (isListeningRef.current && document.visibilityState === 'visible') {
+      // Only restart if the user wants to listen AND the app is visible
+      if (isListening && document.visibilityState === 'visible') {
         addDiagnosticLog('INFO', '🔄 Auto-restarting...');
         
+        // Increased buffer time (350ms) to ensure mic hardware releases
         if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
         restartTimeoutRef.current = setTimeout(() => {
           try {
@@ -138,7 +137,7 @@ function App() {
     };
 
     return recognition;
-  }, [selectedLanguage, addDiagnosticLog]); // ✅ Remove isListening from dependencies
+  }, [selectedLanguage, isListening]);
 
   useEffect(() => {
     recognitionRef.current = initRecognition()
@@ -148,7 +147,7 @@ function App() {
       if (recognitionRef.current) recognitionRef.current.abort()
       stopMicrophoneVisualization()
     }
-  }, [initRecognition, stopMicrophoneVisualization, addDiagnosticLog])
+  }, [initRecognition, stopMicrophoneVisualization])
 
   useEffect(() => {
     if (recognitionRef.current) {
@@ -176,7 +175,6 @@ function App() {
       stream.getTracks().forEach(track => track.stop())
       
       setIsListening(true)
-      isListeningRef.current = true   // ✅ sync update
       recognitionRef.current.start()
       addDiagnosticLog('SUCCESS', 'Listening active', 'Manual restart keeps it alive')
     } catch (err) {
@@ -188,14 +186,13 @@ function App() {
   const stopListening = () => {
     addDiagnosticLog('INFO', '⏹️ Stopped by user', '')
     setIsListening(false)
-    isListeningRef.current = false   // ✅ sync update
     
     if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
     if (recognitionRef.current) {
       try { recognitionRef.current.stop() } catch(e) {}
     }
     
-    // ✅ Also stop the microphone level meter (the original missing line)
+    // ✅ THE ONLY FIX: stop microphone visualization
     stopMicrophoneVisualization()
   }
 
@@ -203,6 +200,8 @@ function App() {
     setTranscript('')
     addDiagnosticLog('INFO', 'Text cleared', '')
   }
+
+  
 
   const clearLogs = () => {
     setDiagnosticLogs([])
@@ -295,7 +294,7 @@ function App() {
 
       <div className="info">
         <p>🔧 <strong>Why This Happens:</strong></p>
-        <p>Chrome on Android has a known bug where <code>onresult</code> events don't fire properly with continuous recognition. This has been an open issue since 2013.</p>
+        <p>Chrome on Android has a known bug where <code>onresult</code> events don't fire properly with continuous recognition [citation:9]. This has been an open issue since 2013.</p>
         <p><strong>The Workaround:</strong> Manual restart in <code>onend</code> - recognition restarts after each phrase.</p>
         <ol>
           <li><strong>Press Start once</strong> - Recognition activates</li>
