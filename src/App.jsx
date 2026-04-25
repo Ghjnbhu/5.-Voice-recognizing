@@ -177,8 +177,13 @@ function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       stream.getTracks().forEach(track => track.stop())
       
+      // ✅ Start microphone level visualization
+      startMicrophoneVisualization().catch(err =>
+        addDiagnosticLog('WARNING', 'Visualization failed', err.message)
+      )
+      
       setIsListening(true)
-      isListeningRef.current = true   // ✅ 4. Update ref synchronously
+      isListeningRef.current = true
       recognitionRef.current.start()
       addDiagnosticLog('SUCCESS', 'Listening active', 'Manual restart keeps it alive')
     } catch (err) {
