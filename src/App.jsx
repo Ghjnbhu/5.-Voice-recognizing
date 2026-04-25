@@ -15,7 +15,6 @@ function App() {
   const analyserNodeRef = useRef(null)
   const animationFrameRef = useRef(null)
   const restartTimeoutRef = useRef(null)
-  // ✅ 1. Add a ref to always hold the current listening state
   const isListeningRef = useRef(false)
 
   const languages = [
@@ -39,7 +38,6 @@ function App() {
     console.log(`${type}: ${message}`, details)
   }
 
-  // Microphone level visualization
   const updateMicrophoneLevel = useCallback(() => {
     if (!analyserNodeRef.current) return
     const dataArray = new Uint8Array(analyserNodeRef.current.frequencyBinCount)
@@ -57,7 +55,9 @@ function App() {
 
   const startMicrophoneVisualization = useCallback(async () => {
     try {
-      if (mediaStreamRef.current?.active) return
+      // FIX: Ensure we don't start a new context if one is already running
+      if (audioContextRef.current?.state === 'running') return;
+      
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       mediaStreamRef.current = stream
       audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)()
@@ -65,6 +65,7 @@ function App() {
       analyserNodeRef.current.fftSize = 256
       const sourceNode = audioContextRef.current.createMediaStreamSource(stream)
       sourceNode.connect(analyserNodeRef.current)
+      
       if (audioContextRef.current.state === 'suspended') {
         await audioContextRef.current.resume()
       }
@@ -76,26 +77,30 @@ function App() {
 
   const stopMicrophoneVisualization = useCallback(() => {
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
-    if (audioContextRef.current) audioContextRef.current.close()
-    if (mediaStreamRef.current) mediaStreamRef.current.getTracks().forEach(track => track.stop())
+    if (audioContextRef.current) {
+      audioContextRef.current.close()
+      audioContextRef.current = null
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop())
+      mediaStreamRef.current = null
+    }
     setMicrophoneLevel(0)
   }, [])
 
-  // WORKAROUND: Manual restart in onend (fixes Android bug)
   const initRecognition = useCallback(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      addDiagnosticLog('ERROR', 'Speech recognition not supported');
-      return null;
-    }
+    if (!SpeechRecognition) return null;
 
     const recognition = new SpeechRecognition();
-    recognition.continuous = false; // Required for stability on Android
+    recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = selectedLanguage;
 
     recognition.onstart = () => {
       addDiagnosticLog('SUCCESS', '🎤 Engine Started');
+      // FIX: Trigger visualization only after recognition has started
+      startMicrophoneVisualization();
     };
 
     recognition.onresult = (event) => {
@@ -112,39 +117,21 @@ function App() {
     };
 
     recognition.onend = () => {
-      // ✅ 2. Use the ref instead of the stale closure variable
+      stopMicrophoneVisualization();
       if (isListeningRef.current && document.visibilityState === 'visible') {
         addDiagnosticLog('INFO', '🔄 Auto-restarting...');
-        
-        // Increased buffer time (350ms) to ensure mic hardware releases
         if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
         restartTimeoutRef.current = setTimeout(() => {
-          try {
-            recognition.start();
-          } catch (err) {
-            addDiagnosticLog('ERROR', 'Restart failed', err.message);
-          }
+          try { recognition.start(); } catch (err) { addDiagnosticLog('ERROR', 'Restart failed', err.message); }
         }, 350);
-      } else {
-        addDiagnosticLog('INFO', 'Stopped (Inactive state)');
-      }
-    };
-
-    recognition.onerror = (event) => {
-      if (event.error === 'no-speech') {
-        addDiagnosticLog('INFO', 'No speech, staying active...');
-      } else {
-        addDiagnosticLog('WARNING', `Error: ${event.error}`);
       }
     };
 
     return recognition;
-  // ✅ 3. Remove isListening from dependencies – we use the ref now
-  }, [selectedLanguage]);
+  }, [selectedLanguage, startMicrophoneVisualization, stopMicrophoneVisualization]);
 
   useEffect(() => {
     recognitionRef.current = initRecognition()
-    addDiagnosticLog('INFO', 'App ready', 'Manual restart workaround active')
     return () => {
       if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
       if (recognitionRef.current) recognitionRef.current.abort()
@@ -152,64 +139,30 @@ function App() {
     }
   }, [initRecognition, stopMicrophoneVisualization])
 
-  useEffect(() => {
-    if (recognitionRef.current) {
-      const wasListening = isListening
-      if (wasListening) {
-        try { recognitionRef.current.stop() } catch(e) {}
-        setTimeout(() => {
-          recognitionRef.current = initRecognition()
-          if (wasListening) {
-            try { recognitionRef.current.start() } catch(e) {}
-          }
-        }, 200)
-      } else {
-        recognitionRef.current = initRecognition()
-      }
-    }
-  }, [selectedLanguage, initRecognition, isListening])
-
   const startListening = async () => {
     setError('')
-    addDiagnosticLog('INFO', '▶️ Start button pressed', 'Manual restart mode')
-    
+    addDiagnosticLog('INFO', '▶️ Start button pressed')
+    setIsListening(true)
+    isListeningRef.current = true
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      stream.getTracks().forEach(track => track.stop())
-      
-      setIsListening(true)
-      isListeningRef.current = true   // ✅ 4. Update ref synchronously
       recognitionRef.current.start()
-      addDiagnosticLog('SUCCESS', 'Listening active', 'Manual restart keeps it alive')
     } catch (err) {
-      addDiagnosticLog('ERROR', 'Permission failed', err.message)
-      setError(`Error: ${err.message}. Tap 🔒 and allow microphone.`)
+      addDiagnosticLog('ERROR', 'Start failed', err.message)
     }
   }
 
   const stopListening = () => {
-    addDiagnosticLog('INFO', '⏹️ Stopped by user', '')
+    addDiagnosticLog('INFO', '⏹️ Stopped by user')
     setIsListening(false)
-    isListeningRef.current = false   // ✅ 5. Update ref synchronously
-    
-    if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current)
+    isListeningRef.current = false
+    stopMicrophoneVisualization()
     if (recognitionRef.current) {
       try { recognitionRef.current.stop() } catch(e) {}
     }
-    
-    // ✅ THE ONLY FIX: stop microphone visualization (already present)
-    stopMicrophoneVisualization()
   }
 
-  const clearText = () => {
-    setTranscript('')
-    addDiagnosticLog('INFO', 'Text cleared', '')
-  }
-
-  const clearLogs = () => {
-    setDiagnosticLogs([])
-    addDiagnosticLog('INFO', 'Logs cleared', '')
-  }
+  const clearText = () => { setTranscript(''); addDiagnosticLog('INFO', 'Text cleared') }
+  const clearLogs = () => { setDiagnosticLogs([]); addDiagnosticLog('INFO', 'Logs cleared') }
 
   const getLevelColor = () => {
     if (microphoneLevel < 20) return '#4caf50'
@@ -249,12 +202,6 @@ function App() {
         <div className="level-bar-bg">
           <div className="level-bar-fill" style={{ width: isListening ? `${microphoneLevel}%` : '0%', backgroundColor: getLevelColor() }} />
         </div>
-        {isListening && microphoneLevel < 10 && (
-          <div className="level-hint">🔴 No sound detected - speak louder</div>
-        )}
-        {isListening && microphoneLevel > 50 && (
-          <div className="level-hint success">🟢 Voice detected! Speaking...</div>
-        )}
       </div>
 
       <div className="visual-console">
@@ -263,18 +210,13 @@ function App() {
           <button onClick={clearLogs} className="console-clear">Clear</button>
         </div>
         <div className="console-logs">
-          {diagnosticLogs.length === 0 ? (
-            <div className="console-empty">Tap "Start Listening" - manual restart keeps it alive!</div>
-          ) : (
-            diagnosticLogs.map((log, idx) => (
-              <div key={idx} className={`console-log console-${log.type.toLowerCase()}`}>
-                <span className="log-icon">{getLogIcon(log.type)}</span>
-                <span className="log-time">{log.timestamp}</span>
-                <span className="log-message">{log.message}</span>
-                {log.details && <span className="log-details">({log.details})</span>}
-              </div>
-            ))
-          )}
+          {diagnosticLogs.map((log, idx) => (
+            <div key={idx} className={`console-log console-${log.type.toLowerCase()}`}>
+              <span className="log-icon">{getLogIcon(log.type)}</span>
+              <span className="log-time">{log.timestamp}</span>
+              <span className="log-message">{log.message}</span>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -286,26 +228,13 @@ function App() {
 
       <div className="status">
         <span className="status-icon">{isListening ? '🔴' : '⚪'}</span>
-        Status: {isListening ? '🔄 Listening (manual restart mode)' : 'Idle'}
+        Status: {isListening ? '🔄 Listening' : 'Idle'}
         <span className="language-badge">{languages.find(l => l.code === selectedLanguage)?.name || selectedLanguage}</span>
       </div>
 
       <div className="transcript-container">
         <h3>Recognized Text:</h3>
         <div className="transcript-box">{transcript || 'Press Start and speak...'}</div>
-      </div>
-
-      <div className="info">
-        <p>🔧 <strong>Why This Happens:</strong></p>
-        <p>Chrome on Android has a known bug where <code>onresult</code> events don't fire properly with continuous recognition [citation:9]. This has been an open issue since 2013.</p>
-        <p><strong>The Workaround:</strong> Manual restart in <code>onend</code> - recognition restarts after each phrase.</p>
-        <ol>
-          <li><strong>Press Start once</strong> - Recognition activates</li>
-          <li><strong>Speak a phrase</strong> - Your words should appear</li>
-          <li><strong>After a pause</strong> - Recognition restarts automatically</li>
-          <li><strong>Watch the console</strong> - See "🔄 Manual restart..." messages</li>
-        </ol>
-        <p className="note">💡 If text still doesn't appear, try Chrome Beta or Canary - they sometimes fix this issue.</p>
       </div>
     </div>
   )
