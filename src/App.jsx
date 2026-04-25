@@ -169,28 +169,7 @@ function App() {
     }
   }, [selectedLanguage, initRecognition, isListening])
 
-  const startListening = async () => {
-    setError('')
-    addDiagnosticLog('INFO', '▶️ Start button pressed', 'Manual restart mode')
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      stream.getTracks().forEach(track => track.stop())
-      
-      // ✅ Start microphone level visualization
-      startMicrophoneVisualization().catch(err =>
-        addDiagnosticLog('WARNING', 'Visualization failed', err.message)
-      )
-      
-      setIsListening(true)
-      isListeningRef.current = true
-      recognitionRef.current.start()
-      addDiagnosticLog('SUCCESS', 'Listening active', 'Manual restart keeps it alive')
-    } catch (err) {
-      addDiagnosticLog('ERROR', 'Permission failed', err.message)
-      setError(`Error: ${err.message}. Tap 🔒 and allow microphone.`)
-    }
-  }
+ 
 
   const stopListening = () => {
     addDiagnosticLog('INFO', '⏹️ Stopped by user', '')
@@ -204,6 +183,39 @@ function App() {
     
     // ✅ THE ONLY FIX: stop microphone visualization (already present)
     stopMicrophoneVisualization()
+  }
+
+  const startListening = async () => {
+    setError('')
+    addDiagnosticLog('INFO', '▶️ Start button pressed', 'Manual restart mode')
+    
+    try {
+      // 1. First, request/initialize the stream for the visualizer
+      // We don't stop the tracks here if we want the visualizer to keep using them.
+      await startMicrophoneVisualization();
+      
+      // 2. Now that the visualizer has the stream, we can start recognition.
+      // Note: On some Android devices, sharing the stream between AudioContext 
+      // and SpeechRecognition can be tricky. If it fails, you may need to 
+      // rely on the browser's internal audio handling.
+      
+      setIsListening(true)
+      isListeningRef.current = true
+      
+      // Small delay to ensure the browser has fully granted/connected the audio stream
+      setTimeout(() => {
+        try {
+          recognitionRef.current.start()
+          addDiagnosticLog('SUCCESS', 'Listening active', 'Manual restart keeps it alive')
+        } catch (err) {
+          addDiagnosticLog('ERROR', 'Recognition start failed', err.message)
+        }
+      }, 100);
+
+    } catch (err) {
+      addDiagnosticLog('ERROR', 'Permission or Audio error', err.message)
+      setError(`Error: ${err.message}. Tap 🔒 and allow microphone.`)
+    }
   }
 
   const clearText = () => {
