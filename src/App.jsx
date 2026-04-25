@@ -7,8 +7,8 @@ function App() {
   const [error, setError] = useState('')
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
   const [selectedLanguage, setSelectedLanguage] = useState('en-US')
-  const [diagnosticInfo, setDiagnosticInfo] = useState('')
   const [diagnosticLogs, setDiagnosticLogs] = useState([])
+  
   const recognitionRef = useRef(null)
   const audioContextRef = useRef(null)
   const mediaStreamRef = useRef(null)
@@ -32,10 +32,7 @@ function App() {
 
   const addDiagnosticLog = (type, message, details = '') => {
     const timestamp = new Date().toLocaleTimeString()
-    const log = { type, message, details, timestamp }
-    setDiagnosticLogs(prev => [log, ...prev].slice(0, 20))
-    setDiagnosticInfo(message)
-    console.log(`${type}: ${message}`, details)
+    setDiagnosticLogs(prev => [{ type, message, details, timestamp }, ...prev].slice(0, 20))
   }
 
   const updateMicrophoneLevel = useCallback(() => {
@@ -47,16 +44,15 @@ function App() {
       const v = (dataArray[i] - 128) / 128
       sum += v * v
     }
-    let average = Math.sqrt(sum / dataArray.length) || 0
-    const level = Math.min(100, Math.floor(average * 200))
+    const level = Math.min(100, Math.floor(Math.sqrt(sum / dataArray.length) * 200))
     setMicrophoneLevel(level)
     animationFrameRef.current = requestAnimationFrame(updateMicrophoneLevel)
   }, [])
 
   const startMicrophoneVisualization = useCallback(async () => {
     try {
-      // FIX: Ensure we don't start a new context if one is already running
-      if (audioContextRef.current?.state === 'running') return;
+      // Release any existing lock first
+      if (audioContextRef.current) await audioContextRef.current.close();
       
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       mediaStreamRef.current = stream
@@ -66,69 +62,54 @@ function App() {
       const sourceNode = audioContextRef.current.createMediaStreamSource(stream)
       sourceNode.connect(analyserNodeRef.current)
       
-      if (audioContextRef.current.state === 'suspended') {
-        await audioContextRef.current.resume()
-      }
+      if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume()
       updateMicrophoneLevel()
     } catch (err) {
-      console.error('Visualization error:', err)
+      addDiagnosticLog('WARNING', 'Visualizer failed', err.message)
     }
   }, [updateMicrophoneLevel])
 
   const stopMicrophoneVisualization = useCallback(() => {
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current)
-    if (audioContextRef.current) {
-      audioContextRef.current.close()
-      audioContextRef.current = null
-    }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach(track => track.stop())
-      mediaStreamRef.current = null
-    }
+    if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
+    if (mediaStreamRef.current) { mediaStreamRef.current.getTracks().forEach(t => t.stop()); mediaStreamRef.current = null; }
     setMicrophoneLevel(0)
   }, [])
 
   const initRecognition = useCallback(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return null;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) return null
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = selectedLanguage;
+    const recognition = new SpeechRecognition()
+    recognition.continuous = false
+    recognition.interimResults = true
+    recognition.lang = selectedLanguage
 
     recognition.onstart = () => {
-      addDiagnosticLog('SUCCESS', '🎤 Engine Started');
-      // FIX: Trigger visualization only after recognition has started
-      startMicrophoneVisualization();
-    };
+      addDiagnosticLog('SUCCESS', '🎤 Engine Started')
+      // Trigger visualizer ONLY after recognition successfully claims the mic
+      startMicrophoneVisualization()
+    }
 
     recognition.onresult = (event) => {
-      let finalText = '';
+      let text = ''
       for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          finalText += event.results[i][0].transcript + ' ';
-        }
+        if (event.results[i].isFinal) text += event.results[i][0].transcript + ' '
       }
-      if (finalText) {
-        setTranscript(prev => prev + finalText);
-        addDiagnosticLog('SUCCESS', '📝 Captured phrase');
-      }
-    };
+      if (text) setTranscript(prev => prev + text)
+    }
 
     recognition.onend = () => {
-      stopMicrophoneVisualization();
-      if (isListeningRef.current && document.visibilityState === 'visible') {
-        addDiagnosticLog('INFO', '🔄 Auto-restarting...');
-        if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+      stopMicrophoneVisualization()
+      if (isListeningRef.current) {
         restartTimeoutRef.current = setTimeout(() => {
-          try { recognition.start(); } catch (err) { addDiagnosticLog('ERROR', 'Restart failed', err.message); }
-        }, 350);
+          try { recognition.start() } catch (e) { addDiagnosticLog('ERROR', 'Restart failed') }
+        }, 350)
       }
-    };
+    }
 
-    return recognition;
-  }, [selectedLanguage, startMicrophoneVisualization, stopMicrophoneVisualization]);
+    return recognition
+  }, [selectedLanguage, startMicrophoneVisualization, stopMicrophoneVisualization])
 
   useEffect(() => {
     recognitionRef.current = initRecognition()
@@ -139,102 +120,45 @@ function App() {
     }
   }, [initRecognition, stopMicrophoneVisualization])
 
-  const startListening = async () => {
+  const startListening = () => {
     setError('')
-    addDiagnosticLog('INFO', '▶️ Start button pressed')
     setIsListening(true)
     isListeningRef.current = true
     try {
       recognitionRef.current.start()
     } catch (err) {
-      addDiagnosticLog('ERROR', 'Start failed', err.message)
+      setError('Error: ' + err.message)
     }
   }
 
   const stopListening = () => {
-    addDiagnosticLog('INFO', '⏹️ Stopped by user')
-    setIsListening(false)
     isListeningRef.current = false
+    setIsListening(false)
     stopMicrophoneVisualization()
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop() } catch(e) {}
-    }
-  }
-
-  const clearText = () => { setTranscript(''); addDiagnosticLog('INFO', 'Text cleared') }
-  const clearLogs = () => { setDiagnosticLogs([]); addDiagnosticLog('INFO', 'Logs cleared') }
-
-  const getLevelColor = () => {
-    if (microphoneLevel < 20) return '#4caf50'
-    if (microphoneLevel < 50) return '#8bc34a'
-    if (microphoneLevel < 80) return '#ff9800'
-    return '#f44336'
-  }
-
-  const getLogIcon = (type) => {
-    switch(type) {
-      case 'SUCCESS': return '✅'
-      case 'ERROR': return '❌'
-      case 'WARNING': return '⚠️'
-      default: return '🔄'
-    }
+    if (recognitionRef.current) recognitionRef.current.stop()
   }
 
   return (
     <div className="container">
       <h1>🎙️ Voice Recognition</h1>
-      <p className="subtitle">Android Workaround Mode - Manual Restart Keeps It Alive</p>
-
-      {error && <div className="error-message">⚠️ {error}</div>}
-
-      <div className="language-selector">
-        <label>🌍 Language:</label>
-        <select value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value)} disabled={isListening}>
-          {languages.map(lang => (<option key={lang.code} value={lang.code}>{lang.name}</option>))}
-        </select>
-      </div>
+      <select value={selectedLanguage} onChange={(e) => setSelectedLanguage(e.target.value)} disabled={isListening}>
+        {languages.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}
+      </select>
 
       <div className="microphone-level-container">
-        <div className="level-label">
-          <span>🎤 Microphone Level</span>
-          <span className="level-percentage">{isListening ? `${microphoneLevel}%` : '—%'}</span>
-        </div>
-        <div className="level-bar-bg">
-          <div className="level-bar-fill" style={{ width: isListening ? `${microphoneLevel}%` : '0%', backgroundColor: getLevelColor() }} />
-        </div>
-      </div>
-
-      <div className="visual-console">
-        <div className="console-header">
-          <strong>📱 Live Console (Manual Restart Mode)</strong>
-          <button onClick={clearLogs} className="console-clear">Clear</button>
-        </div>
-        <div className="console-logs">
-          {diagnosticLogs.map((log, idx) => (
-            <div key={idx} className={`console-log console-${log.type.toLowerCase()}`}>
-              <span className="log-icon">{getLogIcon(log.type)}</span>
-              <span className="log-time">{log.timestamp}</span>
-              <span className="log-message">{log.message}</span>
-            </div>
-          ))}
+        <div className="level-bar-bg" style={{width: '100%', height: '20px', background: '#eee'}}>
+          <div className="level-bar-fill" style={{ width: `${microphoneLevel}%`, height: '100%', background: '#4caf50' }} />
         </div>
       </div>
 
       <div className="button-group">
-        <button onClick={startListening} disabled={isListening} className="btn btn-start">🎤 Start Listening</button>
-        <button onClick={stopListening} disabled={!isListening} className="btn btn-stop">⏹️ Stop</button>
-        <button onClick={clearText} className="btn btn-clear">🗑️ Clear Text</button>
+        <button onClick={startListening} disabled={isListening}>Start</button>
+        <button onClick={stopListening} disabled={!isListening}>Stop</button>
       </div>
 
-      <div className="status">
-        <span className="status-icon">{isListening ? '🔴' : '⚪'}</span>
-        Status: {isListening ? '🔄 Listening' : 'Idle'}
-        <span className="language-badge">{languages.find(l => l.code === selectedLanguage)?.name || selectedLanguage}</span>
-      </div>
-
-      <div className="transcript-container">
-        <h3>Recognized Text:</h3>
-        <div className="transcript-box">{transcript || 'Press Start and speak...'}</div>
+      <div className="transcript-box">{transcript}</div>
+      <div className="console-logs">
+        {diagnosticLogs.map((log, i) => <div key={i}>{log.message}</div>)}
       </div>
     </div>
   )
